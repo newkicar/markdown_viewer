@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.venv_build/
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+*.manifest
+*.spec
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# User config (local to each installation)
+.markdown_viewer/
+
+# Personal development docs and configurations (not for open source)
+AGENTS.md
+opencode.json
+nul
+.agents/
+.rules/
+.specify/
+design/
+memory/
+specs/
+tests/
+assets/
+.markdownlint.json
+requirements.txt
+
+# OpenCode local config and plugin development (not part of the app)
+.opencode/
+
+# Codebase memory index (SQLite database)
+.codebase-memory/
+*.db
+*.db-shm
+*.db-wal
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
