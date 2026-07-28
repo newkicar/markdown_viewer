@@ -1,8 +1,7 @@
 ﻿"""Markdown Viewer PyQt5 three-column application."""
 from __future__ import annotations
 
-import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PyQt5.QtCore import QEvent, Qt, QTimer, QUrl
@@ -19,23 +18,17 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
-    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
-    QMenu,
-    QMenuBar,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QShortcut,
     QSplitter,
-    QStatusBar,
     QTextBrowser,
     QTextEdit,
     QTreeWidget,
@@ -44,14 +37,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from src.core.file_loader import get_file_path_and_name, read_file
+from src.core.file_loader import read_file
 from src.core.file_type_detector import FileType, detect_file
-from src.core.frontmatter import extract_frontmatter
-from src.core.parser import MarkdownAnalyzer, TitleInfo
+from src.core.parser import MarkdownAnalyzer
 from src.core.yaml_renderer import render_yaml_to_html
 from src.utils.config import load_config, load_history, save_config, save_history
 from src.utils.file_association import associate_files, disassociate_files
-from src.utils.search import SearchResult, find_in_text
+from src.utils.search import find_in_text
 
 VIEW_RENDERED = "Rendered"
 VIEW_ORIGINAL = "Original"
@@ -70,7 +62,7 @@ def _is_color_dark(hex_color: str) -> bool:
         # Using relative luminance formula
         luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
         return luminance < 0.5
-    except Exception:
+    except (ValueError, TypeError, IndexError):
         return False
 
 
@@ -85,7 +77,7 @@ def _is_system_dark_theme() -> bool:
         value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
         winreg.CloseKey(key)
         return value == 0
-    except Exception:
+    except (OSError, ValueError, TypeError):
         return False
 
 
@@ -639,8 +631,7 @@ class MainWindow(QMainWindow):
                 if event.mimeData().hasUrls():
                     event.acceptProposedAction()
                     return True
-            elif event.type() == QEvent.Drop:
-                if event.mimeData().hasUrls():
+            elif event.type() == QEvent.Drop and event.mimeData().hasUrls():
                     for url in event.mimeData().urls():
                         path = url.toLocalFile()
                         if path and Path(path).exists():
@@ -653,8 +644,7 @@ class MainWindow(QMainWindow):
                 if event.mimeData().hasUrls():
                     event.acceptProposedAction()
                     return True
-            elif event.type() == QEvent.Drop:
-                if event.mimeData().hasUrls():
+            elif event.type() == QEvent.Drop and event.mimeData().hasUrls():
                     for url in event.mimeData().urls():
                         path = url.toLocalFile()
                         if path and Path(path).exists():
@@ -846,7 +836,7 @@ class MainWindow(QMainWindow):
                 f.write(content)
             self._content = content
             self.statusBar().showMessage(f"Saved: {Path(self._filepath).name}", 3000)
-        except Exception as exc:
+        except OSError as exc:
             QMessageBox.critical(self, "Save Error", f"Cannot save file: {exc}")
 
     def _save_file_as(self) -> None:
@@ -1136,12 +1126,12 @@ def _render_yaml_safe(content: str) -> str:
         if data is None:
             data = {}
         return render_yaml_to_html(data)
-    except Exception:
+    except (yaml.YAMLError, ValueError, TypeError, AttributeError):
         return f"<pre>{_html_escape(content)}</pre>"
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 class MarkdownHighlighter(QSyntaxHighlighter):
