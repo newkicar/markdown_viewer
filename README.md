@@ -2,17 +2,20 @@
 
 一个轻量级 Windows 桌面 Markdown / YAML 三栏预览工具。
 
-> 让用户在不离开文件系统的前提下，获得分栏式、带导航的预览体验：标题导航树 + 渲染预览 + 原始源码视图。
+> 让用户在不离开文件系统的前提下，获得分栏式、带导航的预览体验：标题导航树 + 实时渲染预览 + 原始源码视图。支持图片自适应缩放，零代码质量警告。
 
 [![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Code Quality](https://img.shields.io/badge/ruff-0%20errors-brightgreen.svg)](https://github.com/astral-sh/ruff)
 
 ## 功能概览
 
 - **三栏布局**：左栏文档标题导航树、中栏可编辑源码、右栏实时渲染预览；分隔条可拖拽调整宽度
 - **Markdown 预览**：`.md` / `.markdown` / `.mdx` 文件渲染为 HTML；支持 h1~h6 标题提取与导航
 - **YAML 结构化显示**：`.yaml` / `.yml` 文件渲染为带类型着色的 HTML 表格/树视图
+- **图片自适应**：自动缩放至右栏宽度，拖拽分隔条改变宽度后自动重算（不依赖 CSS，通过 Qt 资源缓存实现）
+- **链接非阻塞**：点击预览中的链接使用 `QDesktopServices.openUrl()` 异步打开，不卡 GUI
 - **Front Matter**：自动解析 Hugo/Jekyll 风格的 YAML front matter
 - **多编码自动检测**：UTF-8-BOM → UTF-8 → GBK → GB2312 回退链，中文不丢字符
 - **全文搜索**：`Ctrl+F` 搜索关键词，跳转到对应行，匹配项高亮
@@ -27,8 +30,9 @@
 - **单实例模式**：通过 QLocalServer 确保同一时间只有一个应用实例
 - **拖拽打开**：拖拽文件到任意栏位（左/中/右栏及 header）直接打开
 - **缩放支持**：`Ctrl+鼠标滚轮` 或 `Ctrl++` / `Ctrl+-` 调整字体大小
-- **打包分发**：支持 PyInstaller 打包为 Windows 可执行文件（onedir 模式）
+- **打包分发**：支持 PyInstaller 打包为 Windows 可执行文件（onedir 模式，无黑框启动）
 - **字号系统**：左栏保持系统默认；中栏/右栏正文 12pt；HTML 标题层次分明（h1=24pt, h2=18pt, h3=16pt, h4=14pt, h5/h6=12pt）
+- **代码质量**：`ruff check src/` 零警告
 
 ### 不在范围内（当前版本）
 
@@ -45,8 +49,9 @@
 | YAML 解析 | [PyYAML](https://pyyaml.org/) | 工业标准，`safe_load` 防止代码注入 |
 | GUI 框架 | PyQt5 / PySide2 | Windows 原生体验，信号槽机制 |
 | 测试框架 | pytest | 生态完善，fixture 支持好 |
+| 代码检查 | [ruff](https://github.com/astral-sh/ruff) | Rust 编写，秒级检查，支持自动修复 |
 | 配置存储 | JSON | 人类可读，适合小数据量 |
-| 打包工具 | PyInstaller | 支持 onedir/onefile 模式 |
+| 打包工具 | PyInstaller | 支持 onedir/onefile 模式，`console=False` 无黑框 |
 
 ## 项目结构
 
@@ -165,13 +170,16 @@ python main.py
 # 运行测试
 pytest tests/
 
-# 代码检查
-ruff check .
+# 代码检查（零警告）
+ruff check src/
+
+# 自动修复
+ruff check --fix src/
 ```
 
 ## 打包为 Windows 可执行文件
 
-项目使用 PyInstaller 打包为 `onedir` 模式（启动更快，比 `onefile` 更稳定）。
+项目使用 PyInstaller 打包为 `onedir` 模式（启动更快，比 `onefile` 更稳定），`console=False` 无控制台窗口。
 
 ### 打包步骤
 
@@ -189,14 +197,17 @@ rm -rf build/ dist/
 # 4. 打包
 pyinstaller --clean markdown_viewer.spec
 
-# 5. 输出在 dist/markdown_viewer/
+# 5. 复制已有配置到输出目录
+xcopy /E /I /Y .markdown_viewer dist\markdown_viewer\.markdown_viewer\
+
+# 6. 输出在 dist/markdown_viewer/
 ```
 
 ### 打包输出
 
 ```
 dist/markdown_viewer/
-├── markdown_viewer.exe    # 主程序
+├── markdown_viewer.exe    # 主程序（无黑框启动）
 └── _internal/             # 依赖库和资源
 ```
 
