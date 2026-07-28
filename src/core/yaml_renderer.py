@@ -24,6 +24,17 @@ def render_yaml_to_html(content: str) -> str:
     return _data_to_html(data)
 
 
+def render_frontmatter_dict_to_html(data: dict) -> str:
+    """Render an already-parsed YAML front matter dict to structured HTML.
+
+    This is the same as render_yaml_to_html() but skips the string→dict
+    parsing step since front matter is already extracted by frontmatter.py.
+    """
+    if not data:
+        return ""
+    return _data_to_html(data)
+
+
 def _data_to_html(data, depth: int = 0) -> str:
     """Recursively convert YAML data structures to HTML fragments."""
     indent = "&nbsp;" * (depth * 4)

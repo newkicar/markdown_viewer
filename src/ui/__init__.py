@@ -40,7 +40,7 @@ from PyQt5.QtWidgets import (
 from src.core.file_loader import read_file
 from src.core.file_type_detector import FileType, detect_file
 from src.core.parser import MarkdownAnalyzer
-from src.core.yaml_renderer import render_yaml_to_html
+from src.core.yaml_renderer import render_frontmatter_dict_to_html, render_yaml_to_html
 from src.utils.config import load_config, load_history, save_config, save_history
 from src.utils.file_association import associate_files, disassociate_files
 from src.utils.search import find_in_text
@@ -445,6 +445,10 @@ class MainWindow(QMainWindow):
         self._content = content
         self._parser.parse(content)
         self._html_doc = self._parser.html
+        # 若存在 YAML front matter，渲染并前置到 body HTML 之前
+        if self._parser.frontmatter:
+            fm_html = render_frontmatter_dict_to_html(self._parser.frontmatter)
+            self._html_doc = fm_html + self._html_doc
         # 为图片添加内联样式和 HTML 属性，确保自适应右栏宽度
         if self._html_doc:
             self._html_doc = self._html_doc.replace(
@@ -737,6 +741,9 @@ class MainWindow(QMainWindow):
         if ft == FileType.MARKDOWN:
             self._parser.parse(content)
             self._html_doc = self._parser.html
+            if self._parser.frontmatter:
+                fm_html = render_frontmatter_dict_to_html(self._parser.frontmatter)
+                self._html_doc = fm_html + self._html_doc
             # 为图片添加内联样式，确保自适应右栏宽度
             if self._html_doc:
                 self._html_doc = self._html_doc.replace(
@@ -1048,6 +1055,8 @@ class MainWindow(QMainWindow):
                 f"a {{ color: {accent}; }} "
                 f"code, pre {{ background-color: {bg}; color: {fg}; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }} "
                 f"img {{ max-width: 100%; height: auto; }} "
+                f"table {{ border-collapse: collapse; }} "
+                f"th, td {{ border: 1px solid #888; padding: 4px 8px; }} "
                 f"h1 {{ font-size: 24pt; }} "
                 f"h2 {{ font-size: 18pt; }} "
                 f"h3 {{ font-size: 16pt; }} "
@@ -1093,6 +1102,8 @@ class MainWindow(QMainWindow):
                 "a { color: #0078d7; } "
                 "code, pre { word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; } "
                 "img { max-width: 100%; height: auto; } "
+                "table { border-collapse: collapse; } "
+                "th, td { border: 1px solid #ccc; padding: 4px 8px; } "
                 "h1 { font-size: 24pt; } "
                 "h2 { font-size: 18pt; } "
                 "h3 { font-size: 16pt; } "
