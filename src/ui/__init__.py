@@ -2,30 +2,56 @@
 from __future__ import annotations
 
 import sys
-import webbrowser
 from datetime import datetime
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QTimer, QEvent
-from PyQt5.QtGui import QFont, QSyntaxHighlighter, QTextCharFormat, QColor
-from PyQt5.QtWidgets import (
-    QAction, QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-    QMenuBar, QMessageBox, QPushButton, QShortcut, QSplitter,
-    QStatusBar, QTextBrowser, QTextEdit, QPlainTextEdit, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget, QFrame,
+from PyQt5.QtCore import QEvent, Qt, QTimer, QUrl
+from PyQt5.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFont,
+    QKeySequence,
+    QPixmap,
+    QSyntaxHighlighter,
+    QTextCharFormat,
+    QTextDocument,
 )
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtWidgets import (
+    QAction,
+    QApplication,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMenuBar,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QShortcut,
+    QSplitter,
+    QStatusBar,
+    QTextBrowser,
+    QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
-from src.core.file_loader import read_file, get_file_path_and_name
-from src.core.file_type_detector import detect_file, FileType
+from src.core.file_loader import get_file_path_and_name, read_file
+from src.core.file_type_detector import FileType, detect_file
 from src.core.frontmatter import extract_frontmatter
 from src.core.parser import MarkdownAnalyzer, TitleInfo
 from src.core.yaml_renderer import render_yaml_to_html
-from src.utils.search import find_in_text, SearchResult
-from src.utils.config import load_config, save_config, load_history, save_history
+from src.utils.config import load_config, load_history, save_config, save_history
 from src.utils.file_association import associate_files, disassociate_files
-
+from src.utils.search import SearchResult, find_in_text
 
 VIEW_RENDERED = "Rendered"
 VIEW_ORIGINAL = "Original"
@@ -223,7 +249,7 @@ class MainWindow(QMainWindow):
         self._preview = _DropForwardTextBrowser(self._load_file)
         self._preview.setOpenExternalLinks(True)
         self._preview.setOpenLinks(False)
-        self._preview.anchorClicked.connect(webbrowser.open)
+        self._preview.anchorClicked.connect(self._on_anchor_clicked)
         # Ensure preview wraps long lines when font size changes
         self._preview.setLineWrapMode(QTextEdit.WidgetWidth)
         self._preview.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -238,6 +264,8 @@ class MainWindow(QMainWindow):
         if len(sizes) != 3:
             sizes = [160, 520, 520]
         self._splitter.setSizes([int(x) for x in sizes])
+        # Dynamic image re-scaling when splitter is dragged
+        self._splitter.splitterMoved.connect(self._schedule_preview_update)
 
         # Search bar (hidden by default, toggled by Ctrl+F)
         self._search_bar = QFrame()
@@ -425,6 +453,12 @@ class MainWindow(QMainWindow):
         self._content = content
         self._parser.parse(content)
         self._html_doc = self._parser.html
+        # 为图片添加内联样式和 HTML 属性，确保自适应右栏宽度
+        if self._html_doc:
+            self._html_doc = self._html_doc.replace(
+                '<img ',
+                '<img width="100%" style="max-width: 100%; height: auto; display: block; margin: 0 auto;" ',
+            )
         self._current_titles = self._parser.titles
         ft = detect_file(path)
         fname = Path(path).name
@@ -432,11 +466,16 @@ class MainWindow(QMainWindow):
         self._title_tree.clear()
         self._build_title_tree()
         if ft == FileType.MARKDOWN:
+            base_url = QUrl.fromLocalFile(str(Path(self._filepath).parent) + "/")
+            self._preview.document().setBaseUrl(base_url)
+            self._pre_scale_resources()
             self._preview.setHtml(self._html_doc)
             line_info = f", {len(self._current_titles)} headings"
         elif ft == FileType.YAML:
             rendered = _render_yaml_safe(content)
             self._html_doc = rendered
+            base_url = QUrl.fromLocalFile(str(Path(self._filepath).parent) + "/")
+            self._preview.document().setBaseUrl(base_url)
             self._preview.setHtml(rendered)
             line_info = ""
         else:
@@ -493,8 +532,7 @@ class MainWindow(QMainWindow):
 
         # Move to next/previous heading
         idx = (idx + delta) % len(titles)
-        if idx < 0:
-            idx = 0
+        idx = max(idx, 0)
         self._heading_index = idx
         target = titles[idx]
         self._jump_to_heading_line(target.line_no)
@@ -572,7 +610,7 @@ class MainWindow(QMainWindow):
         self._refresh_recent_menu()
 
     def _on_anchor_clicked(self, url) -> None:
-        webbrowser.open(url.toString())
+        QDesktopServices.openUrl(url)
 
     def dragEnterEvent(self, event) -> None:
         """Handle drag enter event - accept file drops."""
@@ -597,11 +635,7 @@ class MainWindow(QMainWindow):
         """Allow file drops on column headers and preview area."""
         preview = getattr(self, '_preview', None)
         if preview is not None and obj in (preview, preview.viewport()):
-            if event.type() == QEvent.DragEnter:
-                if event.mimeData().hasUrls():
-                    event.acceptProposedAction()
-                    return True
-            elif event.type() == QEvent.DragMove:
+            if event.type() == QEvent.DragEnter or event.type() == QEvent.DragMove:
                 if event.mimeData().hasUrls():
                     event.acceptProposedAction()
                     return True
@@ -686,6 +720,10 @@ class MainWindow(QMainWindow):
         """Re-render preview when source text changes (debounced)."""
         if not self._filepath:
             return
+        self._schedule_preview_update()
+
+    def _schedule_preview_update(self) -> None:
+        """Start debounce timer for preview re-render (used by source changes and splitter resize)."""
         try:
             self._debounce_timer.stop()
         except AttributeError:
@@ -709,13 +747,75 @@ class MainWindow(QMainWindow):
         if ft == FileType.MARKDOWN:
             self._parser.parse(content)
             self._html_doc = self._parser.html
+            # 为图片添加内联样式，确保自适应右栏宽度
+            if self._html_doc:
+                self._html_doc = self._html_doc.replace(
+                    '<img ',
+                    '<img style="max-width: 100%; height: auto; display: block; margin: 0 auto;" ',
+                )
+            base_url = QUrl.fromLocalFile(str(Path(self._filepath).parent) + "/")
+            self._preview.document().setBaseUrl(base_url)
+            self._pre_scale_resources()
             self._preview.setHtml(self._html_doc)
         elif ft == FileType.YAML:
             rendered = _render_yaml_safe(content)
             self._html_doc = rendered
+            base_url = QUrl.fromLocalFile(str(Path(self._filepath).parent) + "/")
+            self._preview.document().setBaseUrl(base_url)
             self._preview.setHtml(rendered)
         else:
             self._preview.setPlainText(content)
+
+    def _pre_scale_resources(self) -> None:
+        """Pre-scale all <img> resources to fit the preview pane width.
+
+        QTextDocument checks its resource cache via resource(ImageResource, url)
+        when rendering <img> tags. By registering pre-scaled QPixmaps here
+        (BEFORE setHtml), we bypass the need for CSS that Qt 5.15's rich text
+        engine doesn't support.
+        """
+        import re
+
+        html = getattr(self, "_html_doc", "")
+        if not html:
+            return
+
+        srcs = re.findall(r'<img[^>]+src="([^"]+)"', html)
+        if not srcs:
+            return
+
+        # Determine max render width from the preview pane's current width
+        max_width = self._preview.viewport().width()
+        if max_width <= 20:
+            max_width = self._preview.width()
+        max_width = max(max_width - 20, 100)  # 10px padding each side, floor 100px
+
+        doc = self._preview.document()
+        base_path = str(Path(self._filepath).parent) if self._filepath else ""
+        base_url = QUrl.fromLocalFile(base_path + "/")
+
+        for src in srcs:
+            # Skip external URLs (only handle local files)
+            if src.startswith(("http://", "https://", "ftp://")):
+                continue
+
+            # Resolve src against the document's base URL (handles relative paths)
+            resolved_url = base_url.resolved(QUrl(src))
+            img_path = resolved_url.toLocalFile()
+
+            if not img_path or not Path(img_path).exists():
+                continue
+
+            pixmap = QPixmap(img_path)
+            if pixmap.isNull():
+                continue
+
+            # Scale if wider than the preview pane
+            if pixmap.width() > max_width:
+                pixmap = pixmap.scaledToWidth(max_width, Qt.SmoothTransformation)
+
+            # Register with the exact resolved URL QTextDocument will look up
+            doc.addResource(QTextDocument.ImageResource, resolved_url, pixmap)
 
     def _is_modified(self) -> bool:
         """Check if the current document has unsaved changes."""
@@ -932,7 +1032,7 @@ class MainWindow(QMainWindow):
             highlight = colors.get("highlight", "#0078d7")
             if fg == "#000000":
                 fg = "#e0e0e0"
-            from PyQt5.QtGui import QPalette, QColor
+            from PyQt5.QtGui import QColor, QPalette
             pal = QPalette()
             pal.setColor(QPalette.Window, QColor(bg))
             pal.setColor(QPalette.WindowText, QColor(fg))
@@ -957,6 +1057,7 @@ class MainWindow(QMainWindow):
                 f"body {{ background-color: {bg}; color: {fg}; word-wrap: break-word; overflow-wrap: break-word; }} "
                 f"a {{ color: {accent}; }} "
                 f"code, pre {{ background-color: {bg}; color: {fg}; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }} "
+                f"img {{ max-width: 100%; height: auto; }} "
                 f"h1 {{ font-size: 24pt; }} "
                 f"h2 {{ font-size: 18pt; }} "
                 f"h3 {{ font-size: 16pt; }} "
@@ -1001,6 +1102,7 @@ class MainWindow(QMainWindow):
                 "body { word-wrap: break-word; overflow-wrap: break-word; } "
                 "a { color: #0078d7; } "
                 "code, pre { word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; } "
+                "img { max-width: 100%; height: auto; } "
                 "h1 { font-size: 24pt; } "
                 "h2 { font-size: 18pt; } "
                 "h3 { font-size: 16pt; } "
@@ -1081,13 +1183,13 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         # List items
         fmt_list = QTextCharFormat()
         fmt_list.setForeground(list_color)
-        self._rules.append((f"^[\\*\\-]\\s.+", fmt_list))
+        self._rules.append(("^[\\*\\-]\\s.+", fmt_list))
 
         # Fenced code block
         fmt_code = QTextCharFormat()
         fmt_code.setForeground(code_color)
         fmt_code.setFontFamily("Consolas")
-        self._rules.append((f"^```.+", fmt_code))
+        self._rules.append(("^```.+", fmt_code))
 
     def highlightBlock(self, text: str) -> None:
         # Set default color for ALL text first (regular text, no pattern match)

@@ -9,7 +9,6 @@ import re
 from dataclasses import dataclass
 
 import mistletoe
-import yaml
 
 from .frontmatter import extract_frontmatter
 

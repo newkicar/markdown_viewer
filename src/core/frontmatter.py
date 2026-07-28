@@ -6,12 +6,10 @@ commonly used in Hugo/Jekyll/static site generators.
 """
 from __future__ import annotations
 
-from typing import Tuple
-
 import yaml
 
 
-def extract_frontmatter(content: str) -> Tuple[dict | None, str]:
+def extract_frontmatter(content: str) -> tuple[dict | None, str]:
     """
     Extract YAML front matter from the beginning of content.
 

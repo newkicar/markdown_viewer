@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
-
 
 DEFAULT_CONFIG = {
     "window": {"width": 1400, "height": 800, "splitter": [280, 700, 350], "maximized": False},

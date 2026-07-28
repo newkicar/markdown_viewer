@@ -5,7 +5,6 @@ import sys
 import winreg
 from pathlib import Path
 
-
 EXTENSIONS = [".md", ".markdown", ".yaml", ".yml"]
 
 
