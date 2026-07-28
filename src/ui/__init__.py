@@ -1053,7 +1053,7 @@ class MainWindow(QMainWindow):
             self._preview.document().setDefaultStyleSheet(
                 f"body {{ background-color: {bg}; color: {fg}; word-wrap: break-word; overflow-wrap: break-word; }} "
                 f"a {{ color: {accent}; }} "
-                f"code, pre {{ background-color: {bg}; color: {fg}; word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; }} "
+                f"code, pre {{ background-color: #2a2a2a; color: #e0e0e0; }} "
                 f"img {{ max-width: 100%; height: auto; }} "
                 f"table {{ border-collapse: collapse; }} "
                 f"th, td {{ border: 1px solid #888; padding: 4px 8px; }} "
@@ -1100,7 +1100,7 @@ class MainWindow(QMainWindow):
             self._preview.document().setDefaultStyleSheet(
                 "body { word-wrap: break-word; overflow-wrap: break-word; } "
                 "a { color: #0078d7; } "
-                "code, pre { word-wrap: break-word; overflow-wrap: break-word; white-space: pre-wrap; } "
+                "code, pre { background-color: #f5f5f5; color: #333; } "
                 "img { max-width: 100%; height: auto; } "
                 "table { border-collapse: collapse; } "
                 "th, td { border: 1px solid #ccc; padding: 4px 8px; } "
