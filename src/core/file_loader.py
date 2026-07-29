@@ -14,11 +14,4 @@ def read_file(path: str) -> str:
     raise ValueError(f"Cannot decode {path} with any supported encoding")
 
 
-def get_file_path_and_name(filepath: str) -> tuple[str, str]:
-    """Split path into parent directory and filename."""
-    from pathlib import PurePosixPath, PureWindowsPath
-    if "\\" in filepath:
-        p = PureWindowsPath(filepath)
-    else:
-        p = PurePosixPath(filepath)
-    return str(p.parent), p.name
+

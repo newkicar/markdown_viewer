@@ -1,6 +1,10 @@
-﻿"""Markdown Viewer PyQt5 three-column application."""
+"""Markdown Viewer PyQt5 three-column application."""
+
 from __future__ import annotations
 
+import html
+import urllib.request
+import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -40,36 +44,24 @@ from PyQt5.QtWidgets import (
 from src.core.file_loader import read_file
 from src.core.file_type_detector import FileType, detect_file
 from src.core.parser import MarkdownAnalyzer
-from src.core.yaml_renderer import render_frontmatter_dict_to_html, render_yaml_to_html
+from src.core.yaml_renderer import render_frontmatter_dict_to_html
 from src.utils.config import load_config, load_history, save_config, save_history
 from src.utils.file_association import associate_files, disassociate_files
 from src.utils.search import find_in_text
 
 VIEW_RENDERED = "Rendered"
 VIEW_ORIGINAL = "Original"
-FILE_MASK = (
-    "Markdown/YAML files (*.md *.markdown *.mdx *.yaml *.yml);;"
-    "All files (*)"
-)
+FILE_MASK = "Markdown/YAML files (*.md *.markdown *.mdx *.yaml *.yml);;All files (*)"
 
-def _is_color_dark(hex_color: str) -> bool:
-    """Check if a hex color is dark (for choosing appropriate text colors)."""
-    try:
-        hex_color = hex_color.lstrip('#')
-        r = int(hex_color[0:2], 16)
-        g = int(hex_color[2:4], 16)
-        b = int(hex_color[4:6], 16)
-        # Using relative luminance formula
-        luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-        return luminance < 0.5
-    except (ValueError, TypeError, IndexError):
-        return False
+
+
 
 
 def _is_system_dark_theme() -> bool:
     """Detect if the OS is using a dark theme (Windows only)."""
     try:
         import winreg
+
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
@@ -81,9 +73,9 @@ def _is_system_dark_theme() -> bool:
         return False
 
 
-
 class _DropForwardPlainTextEdit(QPlainTextEdit):
     """QPlainTextEdit that forwards file drops to a callback instead of inserting text."""
+
     def __init__(self, drop_callback, parent=None):
         super().__init__(parent)
         self._drop_callback = drop_callback
@@ -109,6 +101,7 @@ class _DropForwardPlainTextEdit(QPlainTextEdit):
 
 class _DropForwardTextBrowser(QTextBrowser):
     """QTextBrowser that forwards file drops to a callback instead of inserting text."""
+
     def __init__(self, drop_callback, parent=None):
         super().__init__(parent)
         self._drop_callback = drop_callback
@@ -271,11 +264,11 @@ class MainWindow(QMainWindow):
         search_layout.addWidget(self._search_input)
         self._search_label = QLabel("")
         search_layout.addWidget(self._search_label)
-        btn_prev = QPushButton("\u25B2")  # up triangle
+        btn_prev = QPushButton("\u25b2")  # up triangle
         btn_prev.setFixedWidth(24)
         btn_prev.clicked.connect(self._search_previous)
         search_layout.addWidget(btn_prev)
-        btn_next = QPushButton("\u25BC")  # down triangle
+        btn_next = QPushButton("\u25bc")  # down triangle
         btn_next.setFixedWidth(24)
         btn_next.clicked.connect(self._search_next)
         search_layout.addWidget(btn_next)
@@ -329,7 +322,11 @@ class MainWindow(QMainWindow):
 
         theme_menu = bar.addMenu("&Theme")
         self._theme_group = []
-        for mode, label in [("light", "&Light"), ("dark", "&Dark"), ("system", "&System")]:
+        for mode, label in [
+            ("light", "&Light"),
+            ("dark", "&Dark"),
+            ("system", "&System"),
+        ]:
             a = theme_menu.addAction(label)
             a.setCheckable(True)
             a.setData(mode)
@@ -419,9 +416,7 @@ class MainWindow(QMainWindow):
             self._preview.setPlainText(self._content)
 
     def _on_open(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open File", "", FILE_MASK
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Open File", "", FILE_MASK)
         if path:
             self._load_file(path)
 
@@ -443,41 +438,16 @@ class MainWindow(QMainWindow):
             return
         self._filepath = str(Path(path).resolve())
         self._content = content
-        self._parser.parse(content)
-        self._html_doc = self._parser.html
-        # 若存在 YAML front matter，渲染并前置到 body HTML 之前
-        if self._parser.frontmatter:
-            fm_html = render_frontmatter_dict_to_html(self._parser.frontmatter)
-            self._html_doc = fm_html + self._html_doc
-        # 为图片添加内联样式和 HTML 属性，确保自适应右栏宽度
-        if self._html_doc:
-            self._html_doc = self._html_doc.replace(
-                '<img ',
-                '<img width="100%" style="max-width: 100%; height: auto; display: block; margin: 0 auto;" ',
-            )
-        self._current_titles = self._parser.titles
-        ft = detect_file(path)
         fname = Path(path).name
         self.setWindowTitle(f"Markdown Viewer - {fname}")
+
+        self._render_content(content)
+
         self._title_tree.clear()
         self._build_title_tree()
-        if ft == FileType.MARKDOWN:
-            base_url = QUrl.fromLocalFile(str(Path(self._filepath).parent) + "/")
-            self._preview.document().setBaseUrl(base_url)
-            self._pre_scale_resources()
-            self._preview.setHtml(self._html_doc)
-            line_info = f", {len(self._current_titles)} headings"
-        elif ft == FileType.YAML:
-            rendered = _render_yaml_safe(content)
-            self._html_doc = rendered
-            base_url = QUrl.fromLocalFile(str(Path(self._filepath).parent) + "/")
-            self._preview.document().setBaseUrl(base_url)
-            self._preview.setHtml(rendered)
-            line_info = ""
-        else:
-            self._preview.setPlainText(content)
-            line_info = ""
         self._source.setPlainText(content)
+        ft = detect_file(path)
+        line_info = f", {len(self._current_titles)} headings" if ft == FileType.MARKDOWN else ""
         # Restore scroll position if previously saved
         self._restore_scroll_position(path)
         self.statusBar().showMessage(f"{fname}  |  {len(content)} chars{line_info}")
@@ -532,7 +502,9 @@ class MainWindow(QMainWindow):
         self._heading_index = idx
         target = titles[idx]
         self._jump_to_heading_line(target.line_no)
-        self.statusBar().showMessage(f"Heading {idx + 1}/{len(titles)}: {target.text}", 2000)
+        self.statusBar().showMessage(
+            f"Heading {idx + 1}/{len(titles)}: {target.text}", 2000
+        )
 
     def _jump_to_heading_line(self, line_no: int) -> None:
         """Jump both source and preview to the given markdown line number."""
@@ -572,7 +544,6 @@ class MainWindow(QMainWindow):
                     preview_cursor.setPosition(block.position())
                     self._preview.setTextCursor(preview_cursor)
                     self._preview.ensureCursorVisible()
-
 
     def _add_to_history(self, path: str) -> None:
         h = load_history()
@@ -629,33 +600,36 @@ class MainWindow(QMainWindow):
 
     def eventFilter(self, obj, event) -> bool:
         """Allow file drops on column headers and preview area."""
-        preview = getattr(self, '_preview', None)
+        preview = getattr(self, "_preview", None)
         if preview is not None and obj in (preview, preview.viewport()):
             if event.type() == QEvent.DragEnter or event.type() == QEvent.DragMove:
                 if event.mimeData().hasUrls():
                     event.acceptProposedAction()
                     return True
             elif event.type() == QEvent.Drop and event.mimeData().hasUrls():
-                    for url in event.mimeData().urls():
-                        path = url.toLocalFile()
-                        if path and Path(path).exists():
-                            self._load_file(path)
-                            break
-                    event.acceptProposedAction()
-                    return True
-        if obj in (getattr(self, '_source_header', None), getattr(self, '_right_header', None)):
+                for url in event.mimeData().urls():
+                    path = url.toLocalFile()
+                    if path and Path(path).exists():
+                        self._load_file(path)
+                        break
+                event.acceptProposedAction()
+                return True
+        if obj in (
+            getattr(self, "_source_header", None),
+            getattr(self, "_right_header", None),
+        ):
             if event.type() == QEvent.DragEnter:
                 if event.mimeData().hasUrls():
                     event.acceptProposedAction()
                     return True
             elif event.type() == QEvent.Drop and event.mimeData().hasUrls():
-                    for url in event.mimeData().urls():
-                        path = url.toLocalFile()
-                        if path and Path(path).exists():
-                            self._load_file(path)
-                            break
-                    event.acceptProposedAction()
-                    return True
+                for url in event.mimeData().urls():
+                    path = url.toLocalFile()
+                    if path and Path(path).exists():
+                        self._load_file(path)
+                        break
+                event.acceptProposedAction()
+                return True
         return super().eventFilter(obj, event)
 
     def wheelEvent(self, event) -> None:
@@ -734,20 +708,25 @@ class MainWindow(QMainWindow):
             delay = 300
         self._debounce_timer.start(delay)
 
-    def _do_render_preview(self) -> None:
-        """Actual render triggered by debounce timer."""
-        content = self._source.toPlainText()
+    def _render_content(self, content: str) -> None:
+        """Parse and render markdown/yaml content to preview pane.
+
+        Shared by _load_file (initial load) and _do_render_preview (live preview).
+        Also updates self._current_titles for title tree navigation.
+        """
         ft = detect_file(self._filepath)
         if ft == FileType.MARKDOWN:
             self._parser.parse(content)
             self._html_doc = self._parser.html
+            self._current_titles = self._parser.titles
+            # Prepend rendered YAML front matter
             if self._parser.frontmatter:
                 fm_html = render_frontmatter_dict_to_html(self._parser.frontmatter)
                 self._html_doc = fm_html + self._html_doc
-            # 为图片添加内联样式，确保自适应右栏宽度
+            # Responsive image styling
             if self._html_doc:
                 self._html_doc = self._html_doc.replace(
-                    '<img ',
+                    "<img ",
                     '<img style="max-width: 100%; height: auto; display: block; margin: 0 auto;" ',
                 )
             base_url = QUrl.fromLocalFile(str(Path(self._filepath).parent) + "/")
@@ -762,6 +741,11 @@ class MainWindow(QMainWindow):
             self._preview.setHtml(rendered)
         else:
             self._preview.setPlainText(content)
+
+    def _do_render_preview(self) -> None:
+        """Actual render triggered by debounce timer."""
+        content = self._source.toPlainText()
+        self._render_content(content)
 
     def _pre_scale_resources(self) -> None:
         """Pre-scale all <img> resources to fit the preview pane width.
@@ -792,8 +776,12 @@ class MainWindow(QMainWindow):
         base_url = QUrl.fromLocalFile(base_path + "/")
 
         for src in srcs:
-            # Skip external URLs (only handle local files)
             if src.startswith(("http://", "https://", "ftp://")):
+                # External URL: download, scale, and cache so QTextDocument doesn't
+                # rely on its own brittle network resource loading.
+                pixmap = _download_external_image(src, max_width)
+                if pixmap is not None:
+                    doc.addResource(QTextDocument.ImageResource, QUrl(src), pixmap)
                 continue
 
             # Resolve src against the document's base URL (handles relative paths)
@@ -848,9 +836,7 @@ class MainWindow(QMainWindow):
 
     def _save_file_as(self) -> None:
         """Save current source content to a new file (Ctrl+Shift+S)."""
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save As", "", FILE_MASK
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "Save As", "", FILE_MASK)
         if not path:
             return
         self._filepath = path
@@ -922,7 +908,9 @@ class MainWindow(QMainWindow):
         if not self._search_results:
             return
         self._search_index = (self._search_index + 1) % len(self._search_results)
-        self._search_label.setText(f"{self._search_index + 1}/{len(self._search_results)}")
+        self._search_label.setText(
+            f"{self._search_index + 1}/{len(self._search_results)}"
+        )
         self._jump_to_search_result(self._search_index)
 
     def _search_previous(self) -> None:
@@ -930,7 +918,9 @@ class MainWindow(QMainWindow):
         if not self._search_results:
             return
         self._search_index = (self._search_index - 1) % len(self._search_results)
-        self._search_label.setText(f"{self._search_index + 1}/{len(self._search_results)}")
+        self._search_label.setText(
+            f"{self._search_index + 1}/{len(self._search_results)}"
+        )
         self._jump_to_search_result(self._search_index)
 
     def _jump_to_search_result(self, index: int) -> None:
@@ -1000,14 +990,6 @@ class MainWindow(QMainWindow):
             a.setChecked(a.data() == mode)
         self._apply_theme(mode)
 
-    def _set_custom_theme(self, colors: dict) -> None:
-        """Set custom theme colors and apply."""
-        self._config["theme"] = "system"
-        self._config["custom_colors"] = colors
-        for a in self._theme_group:
-            a.setChecked(a.data() == "system")
-        self._apply_theme("system")
-
     def _apply_theme(self, mode: str) -> None:
         """Apply palette based on mode: light / dark / system (custom)."""
         app = QApplication.instance()
@@ -1030,6 +1012,7 @@ class MainWindow(QMainWindow):
             if fg == "#000000":
                 fg = "#e0e0e0"
             from PyQt5.QtGui import QColor, QPalette
+
             pal = QPalette()
             pal.setColor(QPalette.Window, QColor(bg))
             pal.setColor(QPalette.WindowText, QColor(fg))
@@ -1119,26 +1102,67 @@ class MainWindow(QMainWindow):
             self._highlighter.set_dark_mode(False)
 
 
-def _html_escape(text: str) -> str:
-    if not text:
-        return ""
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+def _download_external_image(url: str, max_width: int) -> QPixmap | None:
+    """Download an external image, scale it to fit, and return a QPixmap.
+
+    Used by _pre_scale_resources to pre-cache remote images (shields.io badges, etc.)
+    so QTextDocument doesn't need to fetch them on-the-fly (which 5.15 does poorly).
+
+    Scaling strategy:
+    - Images wider than the pane are scaled down to fit.
+    - Small images (badges, icons < 200px) are scaled up by 2x for readability,
+      preserving aspect ratio so badges with different text lengths maintain
+      the same height.
+    - Medium images (200px ~ pane width) are left untouched.
+    """
+    BADGE_SCALE = 2.0
+    MIN_NATIVE_WIDTH = 200  # only scale up images smaller than this
+
+    # shields.io returns SVG by default; QPixmap often lacks the SVG plugin,
+    # so rewrite to PNG when the URL ends with .svg.
+    if url.endswith(".svg"):
+        url = url[:-4] + ".png"
+
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+            },
+        )
+        data = urllib.request.urlopen(req, timeout=15).read()
+        pixmap = QPixmap()
+        if pixmap.loadFromData(data):
+            if pixmap.width() > max_width:
+                # Scale down oversized images to fit the pane
+                pixmap = pixmap.scaledToWidth(max_width, Qt.SmoothTransformation)
+            elif pixmap.width() < MIN_NATIVE_WIDTH:
+                # Scale up small images (badges, icons) by BADGE_SCALE,
+                # preserving native aspect ratio so all badges share height
+                target = min(int(pixmap.width() * BADGE_SCALE), max_width)
+                pixmap = pixmap.scaledToWidth(target, Qt.SmoothTransformation)
+            return pixmap
+    except (OSError, ValueError) as exc:
+        print(f"[image-download] failed to load {url}: {exc}")
+    return None
+
+
+
 
 
 def _render_yaml_safe(content: str) -> str:
+    """Render yaml content as HTML table. Uses frontmatter_dict path (dict→HTML)."""
     try:
-        import yaml
         data = yaml.safe_load(content)
         if data is None:
             data = {}
-        return render_yaml_to_html(data)
+        return render_frontmatter_dict_to_html(data)
     except (yaml.YAMLError, ValueError, TypeError, AttributeError):
-        return f"<pre>{_html_escape(content)}</pre>"
+        return f"<pre>{html.escape(content)}</pre>"
 
 
 def _now_iso() -> str:
@@ -1165,14 +1189,14 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         # Colors based on theme
         if self._dark_mode:
             self._default_color = QColor(220, 220, 220)  # light gray for regular text
-            heading_color = QColor(100, 180, 255)         # bright blue
-            list_color = QColor(180, 180, 180)            # light gray
-            code_color = QColor(100, 180, 255)            # bright blue
+            heading_color = QColor(100, 180, 255)  # bright blue
+            list_color = QColor(180, 180, 180)  # light gray
+            code_color = QColor(100, 180, 255)  # bright blue
         else:
-            self._default_color = QColor(0, 0, 0)         # black for regular text
-            heading_color = QColor(0, 120, 215)           # standard blue
-            list_color = QColor(100, 100, 100)            # medium gray
-            code_color = QColor(0, 120, 215)              # standard blue
+            self._default_color = QColor(0, 0, 0)  # black for regular text
+            heading_color = QColor(0, 120, 215)  # standard blue
+            list_color = QColor(100, 100, 100)  # medium gray
+            code_color = QColor(0, 120, 215)  # standard blue
 
         # Heading formats (h1-h6): bold + color
         for level in range(1, 7):
@@ -1201,7 +1225,6 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         # Then apply pattern-specific formats on top
         for pattern, fmt in self._rules:
             import re
+
             for match in re.finditer(pattern, text):
                 self.setFormat(match.start(), match.end() - match.start(), fmt)
-
-
