@@ -14,6 +14,7 @@ datas = [
     (str(ROOT / "src"), "src"),
     (str(ROOT / "assets" / "icon.ico"), "assets"),
     (str(ROOT / "assets" / "icon.png"), "assets"),
+    (str(ROOT / ".markdown_viewer"), ".markdown_viewer"),
 ]
 
 hiddenimports = [

@@ -238,7 +238,7 @@ class MainWindow(QMainWindow):
         # Ensure preview wraps long lines when font size changes
         self._preview.setLineWrapMode(QTextEdit.WidgetWidth)
         self._preview.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        preview_font = QFont("Microsoft YaHei", font_size)
+        preview_font = QFont("DengXian", font_size)
         self._preview.setFont(preview_font)
         self._preview.document().setDefaultFont(preview_font)
         rv.addWidget(self._preview, 1)
@@ -1034,11 +1034,12 @@ class MainWindow(QMainWindow):
             self._title_tree.setStyleSheet("")
             self._title_tree.header().setStyleSheet("")
             self._preview.document().setDefaultStyleSheet(
-                f"body {{ background-color: {bg}; color: {fg}; font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; line-height: 1.6; word-wrap: break-word; overflow-wrap: break-word; }} "
+                f"body {{ background-color: {bg}; color: {fg}; font-family: 'DengXian', 'Segoe UI', sans-serif; line-height: 1.6; word-wrap: break-word; overflow-wrap: break-word; }} "
                 f"a {{ color: {accent}; }} "
                 f"p {{ margin: 0.5em 0; }} "
-                f"pre {{ background-color: #2a2a2a; color: #e0e0e0; padding: 10px 14px; margin: 0.6em 0; }} "
-                f"code {{ background-color: #2a2a2a; color: #e0e0e0; padding: 1px 4px; }} "
+                f"pre {{ background-color: #2a2a2a; color: #e0e0e0; padding: 12px 16px; margin: 0.6em 0; }} "
+                f"code {{ background-color: #2a2a2a; color: #e0e0e0; padding: 2px 6px; }} "
+                f"blockquote {{ margin: 0.5em 0; padding: 8px 12px; }} "
                 f"img {{ max-width: 100%; height: auto; }} "
                 f"table {{ border-collapse: collapse; }} "
                 f"th, td {{ border: 1px solid #888; padding: 4px 8px; }} "
@@ -1048,7 +1049,8 @@ class MainWindow(QMainWindow):
                 f"h4 {{ font-size: 14pt; margin: 0.5em 0 0.2em; }} "
                 f"h5 {{ font-size: 12pt; margin: 0.5em 0 0.2em; }} "
                 f"h6 {{ font-size: 12pt; margin: 0.5em 0 0.2em; }} "
-                f"ul, ol {{ margin: 0.4em 0; padding-left: 2em; }}"
+                f"ul, ol {{ margin: 0.4em 0; padding-left: 2em; }} "
+                f"li {{ line-height: 1.6; margin-bottom: 0.4em; }}"
             )
             self.menuBar().setStyleSheet("")
             self.statusBar().setStyleSheet("")
@@ -1084,11 +1086,12 @@ class MainWindow(QMainWindow):
             self._title_tree.setStyleSheet("")
             self._title_tree.header().setStyleSheet("")
             self._preview.document().setDefaultStyleSheet(
-                "body { font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; line-height: 1.6; word-wrap: break-word; overflow-wrap: break-word; } "
+                "body { font-family: 'DengXian', 'Segoe UI', sans-serif; line-height: 1.6; word-wrap: break-word; overflow-wrap: break-word; } "
                 "a { color: #0078d7; } "
                 "p { margin: 0.5em 0; } "
-                "pre { background-color: #f5f5f5; color: #333; padding: 10px 14px; margin: 0.6em 0; } "
-                "code { background-color: #f5f5f5; color: #333; padding: 1px 4px; } "
+                "pre { background-color: #f5f5f5; color: #333; padding: 12px 16px; margin: 0.6em 0; } "
+                "code { background-color: #f5f5f5; color: #333; padding: 2px 6px; } "
+                "blockquote { margin: 0.5em 0; padding: 8px 12px; } "
                 "img { max-width: 100%; height: auto; } "
                 "table { border-collapse: collapse; } "
                 "th, td { border: 1px solid #ccc; padding: 4px 8px; } "
@@ -1098,7 +1101,8 @@ class MainWindow(QMainWindow):
                 "h4 { font-size: 14pt; margin: 0.5em 0 0.2em; } "
                 "h5 { font-size: 12pt; margin: 0.5em 0 0.2em; } "
                 "h6 { font-size: 12pt; margin: 0.5em 0 0.2em; } "
-                "ul, ol { margin: 0.4em 0; padding-left: 2em; }"
+                "ul, ol { margin: 0.4em 0; padding-left: 2em; } "
+                "li { line-height: 1.6; margin-bottom: 0.4em; }"
             )
             self.menuBar().setStyleSheet("")
             self.statusBar().setStyleSheet("")

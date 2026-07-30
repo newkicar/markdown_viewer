@@ -32,6 +32,7 @@
 - **缩放支持**：`Ctrl+鼠标滚轮` 或 `Ctrl++` / `Ctrl+-` 调整字体大小
 - **打包分发**：支持 PyInstaller 打包为 Windows 可执行文件（onedir 模式，无黑框启动）
 - **字号系统**：左栏保持系统默认；中栏/右栏正文 12pt；HTML 标题层次分明（h1=24pt, h2=18pt, h3=16pt, h4=14pt, h5/h6=12pt）
+- **渲染品质**：右栏使用 DengXian（等线）字体，`line-height: 1.6` 提升行间呼吸感；段落、列表、代码块、引用块均有合理间距
 - **代码质量**：`ruff check src/` 零警告
 
 ### 不在范围内（当前版本）
@@ -194,34 +195,39 @@ pip install -r requirements.txt pyinstaller
 # 3. 清理旧构建
 rm -rf build/ dist/
 
-# 4. 打包
+# 4. 打包（配置和图标会自动打包到 _internal/）
 pyinstaller --clean markdown_viewer.spec
 
-# 5. 复制已有配置到输出目录
-xcopy /E /I /Y .markdown_viewer dist\markdown_viewer\.markdown_viewer\
-
-# 6. 输出在 dist/markdown_viewer/
+# 5. 输出在 dist/markdown_viewer/
 ```
 
 ### 打包输出
 
 ```
 dist/markdown_viewer/
-├── markdown_viewer.exe    # 主程序（无黑框启动）
-└── _internal/             # 依赖库和资源
+├── markdown_viewer.exe    # 主程序（无黑框启动，图标已嵌入）
+└── _internal/
+    ├── .markdown_viewer/  # 配置（config.json + history.json，自动打包）
+    └── assets/            # 图标资源
 ```
 
 ### 配置文件位置
 
-打包后的 exe 会自动查找项目根目录的 `.markdown_viewer/` 文件夹：
+打包后的 exe 按以下优先级查找 `.markdown_viewer/` 文件夹：
+
+1. `exe 所在目录/_internal/.markdown_viewer/`（PyInstaller 自动打包的配置）
+2. `exe 所在目录/.markdown_viewer/`（用户手动复制覆盖）
+3. 上级目录递归搜索 `.markdown_viewer/`
+4. 兜底：在 `exe 所在目录/` 下新建 `.markdown_viewer/`
 
 ```
 D:\Python Project\markdown_viewer\.markdown_viewer\
-├── config.json      # 主题、窗口大小、字体等配置
+├── config.json      # 主题、窗口大小、字体、自定义颜色等配置
 └── history.json     # 文件打开历史
 ```
 
-**注意**：首次打包后，请将项目根目录已有的 `.markdown_viewer/` 复制到 `dist/markdown_viewer/.markdown_viewer/`，以保留现有配置。
+> 配置已自动打包到 `_internal/.markdown_viewer/`，无需手动复制。
+> 如需保留开发环境的配置历史，可手动将 `.markdown_viewer/` 复制到 `dist/markdown_viewer/.markdown_viewer/` 以覆盖默认配置。
 
 ## 使用示例
 

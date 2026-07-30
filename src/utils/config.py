@@ -14,12 +14,23 @@ DEFAULT_CONFIG = {
 
 
 def _find_config_dir() -> Path:
-    """Find .markdown_viewer directory by searching upward from exe location."""
+    """Find .markdown_viewer directory by searching upward from exe location.
+
+    Priority (frozen mode):
+      1. Bundled _internal/.markdown_viewer (PyInstaller onedir data)
+      2. exe_dir/.markdown_viewer (manual copy by user)
+      3. Upward search for .markdown_viewer in parent directories
+      4. Fallback: exe_dir/.markdown_viewer (create fresh)
+    """
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).parent
-        # Search upward from exe_dir for .markdown_viewer
+        # Priority 1: bundled data (_internal for PyInstaller onedir)
+        bundled = exe_dir / "_internal" / ".markdown_viewer"
+        if bundled.exists():
+            return bundled
+        # Priority 2 & 3: search upward from exe_dir
         current = exe_dir
-        while current != current.parent:  # Stop at root
+        while current != current.parent:
             candidate = current / ".markdown_viewer"
             if candidate.exists():
                 return candidate
