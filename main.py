@@ -2,6 +2,7 @@
 import sys
 from pathlib import Path
 
+from PyQt5.QtGui import QIcon
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtWidgets import QApplication
 
@@ -18,6 +19,14 @@ class MarkdownViewerApp:
         self.app = QApplication(sys.argv)
         self.app.setApplicationName("Markdown Viewer")
         self.app.setOrganizationName("MarkdownViewer")
+        # Set application window icon from bundled assets
+        # Use sys._MEIPASS for PyInstaller-bundled resources; fall back to dev path
+        if getattr(sys, "frozen", False):
+            icon_path = Path(sys._MEIPASS) / "assets" / "icon.ico"
+        else:
+            icon_path = Path(__file__).parent / "assets" / "icon.ico"
+        if icon_path.exists():
+            self.app.setWindowIcon(QIcon(str(icon_path)))
         self.windows: list[MainWindow] = []
         self.server: QLocalServer | None = None
 
