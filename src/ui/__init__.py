@@ -47,6 +47,7 @@ from PyQt5.QtWidgets import (
 from src.core.file_loader import read_file
 from src.core.file_type_detector import FileType, detect_file
 from src.core.parser import MarkdownAnalyzer
+from src.core.scroll_sync import proportional_scroll_target
 from src.core.yaml_renderer import render_frontmatter_dict_to_html
 from src.utils.config import load_config, load_history, save_config, save_history
 from src.utils.file_association import associate_files, disassociate_files
@@ -162,6 +163,10 @@ class MainWindow(QMainWindow):
         self._search_index = 0
         self._heading_index = -1
         self._scroll_positions = {}
+        # Guards the middle<->right proportional scroll sync against the
+        # valueChanged echo that a programmatic setValue on the other pane
+        # fires (see _connect_scroll_sync).
+        self._syncing_scroll = False
         self._modified = False
         self.setWindowTitle("Markdown Viewer")
         w = self._config.get("window", {})
@@ -333,6 +338,9 @@ class MainWindow(QMainWindow):
         self._splitter.setSizes([int(x) for x in sizes])
         # Dynamic image re-scaling when splitter is dragged
         self._splitter.splitterMoved.connect(self._schedule_preview_update)
+        # Middle <-> right proportional scroll sync (must run after both
+        # panes exist — see _connect_scroll_sync).
+        self._connect_scroll_sync()
 
         # Search bar (hidden by default, toggled by Ctrl+F)
         self._search_bar = QFrame()
@@ -753,41 +761,56 @@ class MainWindow(QMainWindow):
         if line_no < 1:
             return
 
-        # Update source editor (direct line number mapping)
-        source_cursor = self._source.textCursor()
-        source_cursor.movePosition(source_cursor.Start)
-        source_cursor.movePosition(
-            source_cursor.Down, source_cursor.MoveAnchor, line_no - 1
-        )
-        self._source.setTextCursor(source_cursor)
-        self._highlight_source_heading_line(line_no)
+        # Programmatic two-pane jump: suppress the proportional scroll sync
+        # for the duration so neither pane's *exact* landing position (source
+        # at the heading line, preview at the heading text) is overwritten by
+        # the cross-pane echo.  The next user scroll re-syncs proportionally.
+        self._syncing_scroll = True
+        try:
+            # Update source editor (line_no is document-relative, matching
+            # the full content the editor holds — front matter included).
+            source_cursor = self._source.textCursor()
+            source_cursor.movePosition(source_cursor.Start)
+            source_cursor.movePosition(
+                source_cursor.Down, source_cursor.MoveAnchor, line_no - 1
+            )
+            self._source.setTextCursor(source_cursor)
+            # Explicit scroll-to-cursor: setTextCursor's implicit viewport
+            # adjustment is not guaranteed by the Qt docs (the preview branch
+            # below already calls ensureCursorVisible explicitly).  Without
+            # this, jumps toward the bottom of a long document can land with
+            # the heading still out of view.
+            self._source.ensureCursorVisible()
+            self._highlight_source_heading_line(line_no)
 
-        # Update preview by searching for the heading text
-        # HTML-rendered blocks don't map 1:1 to markdown lines, so we find the text instead
-        titles = getattr(self, "_current_titles", []) or []
-        target_title = None
-        for idx, t in enumerate(titles):
-            if t.line_no == line_no:
-                target_title = t
-                self._heading_index = idx
-                break
+            # Update preview by searching for the heading text
+            # HTML-rendered blocks don't map 1:1 to markdown lines, so we find the text instead
+            titles = getattr(self, "_current_titles", []) or []
+            target_title = None
+            for idx, t in enumerate(titles):
+                if t.line_no == line_no:
+                    target_title = t
+                    self._heading_index = idx
+                    break
 
-        if target_title:
-            # Search for the heading text in preview and scroll to it
-            html_doc = self._preview.document()
-            cursor = html_doc.find(target_title.text, 0)  # Search from start
-            if not cursor.isNull():
-                self._preview.setTextCursor(cursor)
-                self._preview.ensureCursorVisible()
-                self._highlight_preview_heading(cursor)
-            # If text search fails, fall back to block number (may work for early headings)
-            else:
-                block = html_doc.findBlockByNumber(max(0, line_no - 1))
-                if block.isValid():
-                    preview_cursor = self._preview.textCursor()
-                    preview_cursor.setPosition(block.position())
-                    self._preview.setTextCursor(preview_cursor)
+            if target_title:
+                # Search for the heading text in preview and scroll to it
+                html_doc = self._preview.document()
+                cursor = html_doc.find(target_title.text, 0)  # Search from start
+                if not cursor.isNull():
+                    self._preview.setTextCursor(cursor)
                     self._preview.ensureCursorVisible()
+                    self._highlight_preview_heading(cursor)
+                # If text search fails, fall back to block number (may work for early headings)
+                else:
+                    block = html_doc.findBlockByNumber(max(0, line_no - 1))
+                    if block.isValid():
+                        preview_cursor = self._preview.textCursor()
+                        preview_cursor.setPosition(block.position())
+                        self._preview.setTextCursor(preview_cursor)
+                        self._preview.ensureCursorVisible()
+        finally:
+            self._syncing_scroll = False
 
     def _highlight_source_heading_line(self, line_no: int) -> None:
         """Highlight the heading line in the source editor.
@@ -1396,6 +1419,72 @@ class MainWindow(QMainWindow):
             self._hide_find_dialog()
             return
         super().keyPressEvent(event)
+
+    # ---- Proportional scroll sync (middle <-> right) ----
+
+    def _connect_scroll_sync(self) -> None:
+        """Wire middle/right vertical scrollbars for proportional sync.
+
+        The panes have different widths (user-draggable splitter), so the same
+        markdown wraps to different line counts in each — pixel-based sync
+        would drift.  We sync by *ratio* (value / maximum) instead; the pure
+        mapping lives in src/core/scroll_sync.py.
+
+        Both scrollbars also re-align the preview on rangeChanged: Qt lays out
+        QTextDocument lazily, so on show() / splitter drag / font zoom a range
+        change is the signal that a pane's content height changed and the
+        preview should be re-anchored from the source (the source is treated
+        as the primary pane for range-driven realignment).
+        """
+        src_sb = self._source.verticalScrollBar()
+        prev_sb = self._preview.verticalScrollBar()
+        src_sb.valueChanged.connect(self._on_source_scrolled)
+        prev_sb.valueChanged.connect(self._on_preview_scrolled)
+        src_sb.rangeChanged.connect(self._sync_preview_from_source)
+        prev_sb.rangeChanged.connect(self._sync_preview_from_source)
+
+    def _apply_synced_scroll(self, scrollbar, target: int) -> None:
+        """Set a scrollbar under the sync guard so the echo doesn't loop."""
+        if target == scrollbar.value():
+            return
+        self._syncing_scroll = True
+        try:
+            scrollbar.setValue(target)
+        finally:
+            self._syncing_scroll = False
+
+    def _on_source_scrolled(self, value: int) -> None:
+        """Middle pane moved (wheel/drag/keyboard) -> preview follows."""
+        if self._syncing_scroll:
+            return
+        src_sb = self._source.verticalScrollBar()
+        prev_sb = self._preview.verticalScrollBar()
+        target = proportional_scroll_target(value, src_sb.maximum(), prev_sb.maximum())
+        self._apply_synced_scroll(prev_sb, target)
+
+    def _on_preview_scrolled(self, value: int) -> None:
+        """Right pane moved -> middle follows."""
+        if self._syncing_scroll:
+            return
+        src_sb = self._source.verticalScrollBar()
+        prev_sb = self._preview.verticalScrollBar()
+        target = proportional_scroll_target(value, prev_sb.maximum(), src_sb.maximum())
+        self._apply_synced_scroll(src_sb, target)
+
+    def _sync_preview_from_source(self) -> None:
+        """Re-anchor the preview to the source's current proportional position.
+
+        Triggered by range changes (layout settle, splitter drag, font zoom)
+        and by scroll-restore retries.  One-directional by design: making the
+        source follow a range change of the still-empty preview would clobber
+        a saved scroll restore during pre-show layout.
+        """
+        if self._syncing_scroll:
+            return
+        src_sb = self._source.verticalScrollBar()
+        prev_sb = self._preview.verticalScrollBar()
+        target = proportional_scroll_target(src_sb.value(), src_sb.maximum(), prev_sb.maximum())
+        self._apply_synced_scroll(prev_sb, target)
 
     # ---- Scroll position memory ----
 

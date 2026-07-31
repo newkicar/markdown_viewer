@@ -33,7 +33,8 @@
 - **打包分发**：支持 PyInstaller 打包为 Windows 可执行文件（onedir 模式，无黑框启动）
 - **字号系统**：左栏保持系统默认；中栏/右栏正文 12pt；HTML 标题层次分明（h1=24pt, h2=18pt, h3=16pt, h4=14pt, h5/h6=12pt）
 - **三栏行距统一**：左栏标题树、中栏编辑器、右栏预览均为 1.6 行距（中栏 QTextEdit 引擎 + 预览 block-format 行距）
-- **标题点击高亮**：点击左栏标题树，源码对应行与预览标题同时高亮
+- **标题点击定位**：点击左栏标题树，中栏滚动定位到对应行（含 Front Matter 行偏移校正）、源码行与预览标题同时高亮
+- **滚动同步**：中栏与右栏按比例（value/maximum）双向滚动同步，两栏宽度不同（分隔条可拖拽）也精确对齐；拖拽分隔条后自动重对齐
 - **渲染品质**：右栏使用 DengXian（等线）字体，`line-height: 1.6` 提升行间呼吸感；段落、列表、代码块、引用块均有合理间距；代码块保持紧凑行距以维持背景连续
 - **代码质量**：`ruff check src/` 零警告
 
@@ -67,6 +68,7 @@ markdown_viewer/
 │   │   ├── file_type_detector.py # 文件类型识别
 │   │   ├── frontmatter.py       # YAML front matter 提取
 │   │   ├── parser.py            # Markdown 解析、标题提取、HTML 渲染
+│   │   ├── scroll_sync.py       # 中/右栏滚动比例映射（纯逻辑）
 │   │   └── yaml_renderer.py     # YAML → HTML 结构化显示
 │   ├── ui/                      # UI 层（PyQt5）
 │   │   └── __init__.py          # MainWindow + 三栏布局 + 主题系统
@@ -122,6 +124,7 @@ markdown_viewer/
     │ ├── file_type_detector.py │ ├── file_association.py│
     │ ├── frontmatter.py  │  │ ├── search.py          │
     │ ├── parser.py       │  │ └── __init__.py        │
+    │ ├── scroll_sync.py  │  └────────────────────────┘
     │ └── yaml_renderer.py│  └────────────────────────┘
     └─────────────────────┘
                │
@@ -199,8 +202,8 @@ pip install -r requirements.txt pyinstaller
 # 3. 清理旧构建
 rm -rf build/ dist/
 
-# 4. 打包（配置和图标会自动打包到 _internal/）
-pyinstaller --clean markdown_viewer.spec
+# 4. 打包（配置和图标会自动打包到 _internal/；-y 覆盖非空 dist）
+pyinstaller --clean -y markdown_viewer.spec
 
 # 5. 输出在 dist/markdown_viewer/
 ```

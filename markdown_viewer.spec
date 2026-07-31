@@ -22,6 +22,7 @@ hiddenimports = [
     "src.core.file_type_detector",
     "src.core.frontmatter",
     "src.core.parser",
+    "src.core.scroll_sync",
     "src.core.yaml_renderer",
     "src.ui",
     "src.utils.config",

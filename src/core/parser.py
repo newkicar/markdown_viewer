@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import mistletoe
 
-from .frontmatter import extract_frontmatter
+from .frontmatter import _scan_frontmatter
 
 
 @dataclass(frozen=True)
@@ -31,9 +31,16 @@ class MarkdownAnalyzer:
 
     def parse(self, content: str) -> None:
         """Parse content, extracting front matter and building renderable structures."""
-        self.frontmatter, body = extract_frontmatter(content)
+        self.frontmatter, body, offset = _scan_frontmatter(content)
         self.body = body
         self.titles = self._extract_titles(body)
+        # Titles carry body-relative line numbers; the source editor holds the
+        # FULL content (front matter + body), so shift them into document
+        # coordinates once here — callers jump directly with title.line_no.
+        if offset:
+            self.titles = [
+                TitleInfo(t.level, t.text, t.line_no + offset) for t in self.titles
+            ]
         self.html = self._render_html(body)
 
     @staticmethod

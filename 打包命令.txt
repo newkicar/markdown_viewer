@@ -1,1 +1,1 @@
-pyinstaller --clean markdown_viewer.spec
+pyinstaller --clean -y markdown_viewer.spec
