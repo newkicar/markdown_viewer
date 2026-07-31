@@ -16,9 +16,11 @@ from PyQt5.QtGui import (
     QKeySequence,
     QPixmap,
     QSyntaxHighlighter,
+    QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
     QTextDocument,
+    QTextFormat,
 )
 from PyQt5.QtWidgets import (
     QAction,
@@ -31,7 +33,6 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QShortcut,
     QSplitter,
@@ -55,6 +56,16 @@ VIEW_RENDERED = "Rendered"
 VIEW_ORIGINAL = "Original"
 FILE_MASK = "Markdown/YAML files (*.md *.markdown *.mdx *.yaml *.yml);;All files (*)"
 
+# Vertical padding for title-tree rows — QTreeWidget has no line-height API,
+# so this approximates the preview's 1.6 line-height (which the editor also
+# uses via _apply_source_line_spacing) and keeps the left column from looking
+# cramped next to the other panes. Colors are NOT set here so the app-level
+# QSS / palette keeps controlling theme colors (widget QSS and app QSS merge).
+_TITLE_TREE_ROW_PADDING = "QTreeWidget::item { padding: 4px 0; }"
+
+# Translucent yellow used to highlight the active heading in source + preview.
+_HEADING_HIGHLIGHT = QColor(255, 255, 0, 70)
+
 
 
 
@@ -75,8 +86,13 @@ def _is_system_dark_theme() -> bool:
         return False
 
 
-class _DropForwardPlainTextEdit(QPlainTextEdit):
-    """QPlainTextEdit that ignores file drops and forwards normal text drops.
+class _DropForwardTextEdit(QTextEdit):
+    """QTextEdit that ignores file drops and forwards normal text drops.
+
+    The center editor is a QTextEdit (not QPlainTextEdit) on purpose:
+    QPlainTextDocumentLayout ignores QTextBlockFormat line-height, so the
+    1.6 line-height that the preview renders would be impossible there.
+    QTextEdit's QTextDocumentLayout honors it (see _apply_source_line_spacing).
 
     File drops (URLs) are ignored so the event propagates to MainWindow.
     This keeps ``_load_file`` → ``setPlainText`` out of the editor's own
@@ -205,7 +221,9 @@ class MainWindow(QMainWindow):
             return  # wrapped C++ object deleted
         if issues:
             tag = f"[cursor:{context}]" if context else "[cursor]"
-            print(f"{tag} ⚠️  {'; '.join(issues)}")
+            # ASCII-only warning: the check also runs on Windows GBK consoles
+            # where emoji would crash print() with UnicodeEncodeError.
+            print(f"{tag} WARN: {'; '.join(issues)}")
 
     def _build_ui(self) -> None:
         """Build the three-column layout."""
@@ -235,6 +253,9 @@ class MainWindow(QMainWindow):
         self._title_tree = QTreeWidget()
         self._title_tree.setHeaderLabel("Titles")
         self._title_tree.setFont(QFont("DengXian", font_size))
+        # Row padding approximates the preview's 1.6 line-height (kept in sync
+        # with _apply_theme, which resets the stylesheet on theme switches).
+        self._title_tree.setStyleSheet(_TITLE_TREE_ROW_PADDING)
         self._title_tree.itemClicked.connect(self._on_title_clicked)
         lv.addWidget(self._title_tree, 1)
         self._splitter.addWidget(left)
@@ -260,14 +281,20 @@ class MainWindow(QMainWindow):
         self._source_header.setAcceptDrops(True)
         self._source_header.installEventFilter(self)
         sv.addWidget(source_header)
-        # Source editor
-        self._source = _DropForwardPlainTextEdit()
+        # Source editor. QTextEdit (not QPlainTextEdit): QPlainTextDocumentLayout
+        # ignores block-format line-height, which the 1.6 spacing needs.
+        self._source = _DropForwardTextEdit()
         self._source.setFont(QFont("DengXian", font_size))
+        # Keep plain-text paste semantics QPlainTextEdit had by default.
+        self._source.setAcceptRichText(False)
         self._source.textChanged.connect(self._on_source_changed)
         self._highlighter = MarkdownHighlighter(self._source.document())
         # Force cursor width to fix invisible-cursor issue on Windows
         # (some Qt builds / configs default to cursorWidth 0)
         self._source.setCursorWidth(2)
+        # Apply the preview's 1.6 line-height so the empty editor and any
+        # typed-first content already breathe like the rendered pane.
+        self._apply_source_line_spacing()
         sv.addWidget(self._source, 1)
         self._splitter.addWidget(source_wrapper)
 
@@ -641,6 +668,9 @@ class MainWindow(QMainWindow):
         # cursor rendering.  Reset the cursor immediately.
         self._source.setExtraSelections([])
         self._source.setTextCursor(self._source.textCursor())
+        # setPlainText replaces the document, so re-apply the 1.6 line-height
+        # (also clears stale undo state from the previous document).
+        self._apply_source_line_spacing()
         ft = detect_file(path)
         line_info = f", {len(self._current_titles)} headings" if ft == FileType.MARKDOWN else ""
         # Restore scroll position if previously saved
@@ -654,6 +684,17 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._source.setFocus)
         QTimer.singleShot(0, self._source.ensureCursorVisible)
         QTimer.singleShot(50, lambda: self._assert_cursor_healthy("loadFile"))
+
+    def _apply_source_line_spacing(self) -> None:
+        """Match the preview's 1.6 line-height in the source editor.
+
+        QPlainTextEdit's QPlainTextDocumentLayout ignores block-format
+        line-height (verified against Qt 5.15), so the editor is a QTextEdit,
+        whose QTextDocumentLayout honors it. Undo is briefly disabled so this
+        formatting pass neither enters the undo stack nor leaves stale undo
+        state from a previous document behind.
+        """
+        _apply_line_spacing(self._source.document())
 
     def _build_title_tree(self) -> None:
         if not self._current_titles:
@@ -719,6 +760,7 @@ class MainWindow(QMainWindow):
             source_cursor.Down, source_cursor.MoveAnchor, line_no - 1
         )
         self._source.setTextCursor(source_cursor)
+        self._highlight_source_heading_line(line_no)
 
         # Update preview by searching for the heading text
         # HTML-rendered blocks don't map 1:1 to markdown lines, so we find the text instead
@@ -737,6 +779,7 @@ class MainWindow(QMainWindow):
             if not cursor.isNull():
                 self._preview.setTextCursor(cursor)
                 self._preview.ensureCursorVisible()
+                self._highlight_preview_heading(cursor)
             # If text search fails, fall back to block number (may work for early headings)
             else:
                 block = html_doc.findBlockByNumber(max(0, line_no - 1))
@@ -745,6 +788,39 @@ class MainWindow(QMainWindow):
                     preview_cursor.setPosition(block.position())
                     self._preview.setTextCursor(preview_cursor)
                     self._preview.ensureCursorVisible()
+
+    def _highlight_source_heading_line(self, line_no: int) -> None:
+        """Highlight the heading line in the source editor.
+
+        Replaces any current extra selections (e.g. search highlights) — the
+        heading highlight is temporary, and the next search/load resets it.
+        ponytail: search highlights are intentionally not merged here; keeping
+        both would require caching selections, which this feature doesn't need.
+        """
+        block = self._source.document().findBlockByNumber(line_no - 1)
+        if not block.isValid():
+            return
+        sel = QTextEdit.ExtraSelection()
+        sel.cursor = QTextCursor(block)
+        sel.cursor.select(QTextCursor.LineUnderCursor)
+        sel.format.setBackground(_HEADING_HIGHLIGHT)
+        sel.format.setProperty(QTextFormat.FullWidthSelection, True)
+        self._source.setExtraSelections([sel])
+        # Qt 5.15 workaround: setExtraSelections can corrupt cursor rendering;
+        # reset the cursor immediately so it stays visible.
+        self._source.setTextCursor(self._source.textCursor())
+        self._assert_cursor_healthy("jumpHeading")
+
+    def _highlight_preview_heading(self, cursor: QTextCursor) -> None:
+        """Highlight the heading text in the preview pane.
+
+        The preview is read-only, so setting extra selections here does not
+        need the cursor-reset workaround used for the source editor.
+        """
+        sel = QTextEdit.ExtraSelection()
+        sel.cursor = QTextCursor(cursor)  # copy, keep the preview cursor untouched
+        sel.format.setBackground(_HEADING_HIGHLIGHT)
+        self._preview.setExtraSelections([sel])
 
     def _add_to_history(self, path: str) -> None:
         h = load_history()
@@ -956,12 +1032,16 @@ class MainWindow(QMainWindow):
             self._preview.document().setBaseUrl(base_url)
             self._pre_scale_resources()
             self._preview.setHtml(self._html_doc)
+            # Qt ignores `line-height` from a default stylesheet on fragment
+            # HTML, so the preview would render tighter than the editor.
+            _apply_line_spacing(self._preview.document())
         elif ft == FileType.YAML:
             rendered = _render_yaml_safe(content)
             self._html_doc = rendered
             base_url = QUrl.fromLocalFile(str(Path(self._filepath).parent) + "/")
             self._preview.document().setBaseUrl(base_url)
             self._preview.setHtml(rendered)
+            _apply_line_spacing(self._preview.document())
         else:
             self._preview.setPlainText(content)
 
@@ -1334,8 +1414,30 @@ class MainWindow(QMainWindow):
         if pos is None:
             saved = self._config.get("scroll_positions", {})
             pos = saved.get(path)
-        if pos:
-            self._source.verticalScrollBar().setValue(pos.get("editor_scroll", 0))
+        if not pos:
+            return
+        target = pos.get("editor_scroll", 0)
+        sb = self._source.verticalScrollBar()
+        sb.setValue(target)
+        # QTextEdit lays out lazily: before the widget is shown the scrollbar
+        # range is 0, and every layout pass after show() (viewport resize)
+        # re-centers the scrollbar on the cursor. A single setValue is either
+        # clamped or overwritten, so poll until the value sticks for two
+        # consecutive reads — at which point the layout has settled. This is
+        # what makes pre-show startup restores (open file before show()) work.
+        if sb.value() != target:
+            def retry(attempts: int, stable: int) -> None:
+                sb.setValue(target)
+                settled = sb.value() == target
+                if settled and stable >= 1:
+                    return  # two consecutive stable reads -> layout settled
+                if attempts <= 0:
+                    return
+                QTimer.singleShot(
+                    100, lambda: retry(attempts - 1, stable + 1 if settled else 0)
+                )
+
+            QTimer.singleShot(0, lambda: retry(20, 0))
 
     def _persist_scroll_positions(self) -> None:
         """Write current scroll positions to config.json."""
@@ -1390,7 +1492,9 @@ class MainWindow(QMainWindow):
             # Remove individual widget stylesheets — use app-level stylesheet instead
             self._source.setStyleSheet("")
             self._preview.setStyleSheet("")
-            self._title_tree.setStyleSheet("")
+            # Row padding is reapplied here because clearing the stylesheet above
+            # would otherwise drop the spacing set in _build_ui.
+            self._title_tree.setStyleSheet(_TITLE_TREE_ROW_PADDING)
             self._title_tree.header().setStyleSheet("")
             self._preview.document().setDefaultStyleSheet(
                 f"body {{ background-color: {bg}; color: {fg}; font-family: 'DengXian', 'Segoe UI', sans-serif; line-height: 1.6; word-wrap: break-word; overflow-wrap: break-word; }} "
@@ -1415,10 +1519,11 @@ class MainWindow(QMainWindow):
             self.statusBar().setStyleSheet("")
             app.setStyleSheet(
                 f"QMainWindow {{ background-color: {bg}; }}"
-                # Note: QPlainTextEdit deliberately omitted from stylesheet —
-                # setting `color` via stylesheet causes cursor rendering to
-                # break on some Qt 5.15 / Windows builds (cursor bitmap not
-                # initialized). Palette Base + Text roles handle the colors.
+                # Note: source editor (QTextEdit) deliberately omitted from
+                # stylesheet — setting `color` via stylesheet causes cursor
+                # rendering to break on some Qt 5.15 / Windows builds (cursor
+                # bitmap not initialized). Palette Base + Text roles handle
+                # the colors.
                 f"QTextBrowser {{ background-color: {bg}; color: {fg}; }}"
                 f"QTreeWidget {{ background-color: {bg}; color: {fg}; }}"
                 f"QTreeWidget::item {{ color: {fg}; }}"
@@ -1445,7 +1550,9 @@ class MainWindow(QMainWindow):
         else:
             self._source.setStyleSheet("")
             self._preview.setStyleSheet("")
-            self._title_tree.setStyleSheet("")
+            # Row padding is reapplied here because clearing the stylesheet above
+            # would otherwise drop the spacing set in _build_ui.
+            self._title_tree.setStyleSheet(_TITLE_TREE_ROW_PADDING)
             self._title_tree.header().setStyleSheet("")
             self._preview.document().setDefaultStyleSheet(
                 "body { font-family: 'DengXian', 'Segoe UI', sans-serif; line-height: 1.6; word-wrap: break-word; overflow-wrap: break-word; } "
@@ -1537,12 +1644,47 @@ def _render_yaml_safe(content: str) -> str:
         return f"<pre>{html.escape(content)}</pre>"
 
 
+def _apply_line_spacing(doc) -> None:
+    """Merge the 1.6 proportional line-height over a whole QTextDocument.
+
+    Qt 5.15's rich text engine renders block-format line-height only via
+    QTextDocumentLayout (QTextEdit/QTextBrowser). QPlainTextDocumentLayout
+    ignores it, and a `line-height` in a default stylesheet is not applied to
+    fragment HTML — so the editor AND the preview must both set this
+    explicitly to match the target 1.6 spacing. New blocks inherit the
+    current block format, so edits keep the spacing. Undo is briefly disabled
+    so this pass neither enters the undo stack nor leaves stale undo state.
+
+    Blocks carrying a background are left at the default line height: Qt
+    paints a block-format background only over the text-line rect, so the
+    extra leading from a 160% line height would show as transparent gaps
+    between the lines of a fenced code block (whose `pre` background-color
+    maps to QTextBlockFormat). Keeping code blocks tight keeps their
+    background contiguous.
+    """
+    doc.setUndoRedoEnabled(False)
+    try:
+        block = doc.begin()
+        while block.isValid():
+            if block.blockFormat().background().style() != Qt.NoBrush:
+                block = block.next()
+                continue
+            cursor = QTextCursor(block)
+            cursor.select(QTextCursor.BlockUnderCursor)
+            fmt = QTextBlockFormat()
+            fmt.setLineHeight(160, QTextBlockFormat.ProportionalHeight)
+            cursor.mergeBlockFormat(fmt)
+            block = block.next()
+    finally:
+        doc.setUndoRedoEnabled(True)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 class MarkdownHighlighter(QSyntaxHighlighter):
-    """Minimal Markdown syntax highlighter for QPlainTextEdit."""
+    """Minimal Markdown syntax highlighter for the QTextEdit source editor."""
 
     def __init__(self, parent=None, dark_mode: bool = False) -> None:
         super().__init__(parent)
