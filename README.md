@@ -32,7 +32,9 @@
 - **缩放支持**：`Ctrl+鼠标滚轮` 或 `Ctrl++` / `Ctrl+-` 调整字体大小
 - **打包分发**：支持 PyInstaller 打包为 Windows 可执行文件（onedir 模式，无黑框启动）
 - **字号系统**：左栏保持系统默认；中栏/右栏正文 12pt；HTML 标题层次分明（h1=24pt, h2=18pt, h3=16pt, h4=14pt, h5/h6=12pt）
-- **渲染品质**：右栏使用 DengXian（等线）字体，`line-height: 1.6` 提升行间呼吸感；段落、列表、代码块、引用块均有合理间距
+- **三栏行距统一**：左栏标题树、中栏编辑器、右栏预览均为 1.6 行距（中栏 QTextEdit 引擎 + 预览 block-format 行距）
+- **标题点击高亮**：点击左栏标题树，源码对应行与预览标题同时高亮
+- **渲染品质**：右栏使用 DengXian（等线）字体，`line-height: 1.6` 提升行间呼吸感；段落、列表、代码块、引用块均有合理间距；代码块保持紧凑行距以维持背景连续
 - **代码质量**：`ruff check src/` 零警告
 
 ### 不在范围内（当前版本）
@@ -82,8 +84,10 @@ markdown_viewer/
 │   ├── test_ui_real.py
 │   ├── test_search_ui.py
 │   ├── test_scroll_memory.py
-│   ├── test_custom_theme.py
 │   ├── test_save.py
+│   ├── test_external_image.py
+│   ├── test_file_association.py
+│   ├── fixtures/                # 测试 fixture 数据
 │   └── conftest.py
 ├── specs/                       # 产品需求与验收标准
 │   ├── PRD.md
