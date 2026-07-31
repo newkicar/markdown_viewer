@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from PyQt5.QtCore import QEvent, Qt, QTimer, QUrl
+from PyQt5.QtCore import QEvent, QPoint, Qt, QTimer, QUrl
 from PyQt5.QtGui import (
     QColor,
     QDesktopServices,
@@ -17,11 +17,13 @@ from PyQt5.QtGui import (
     QPixmap,
     QSyntaxHighlighter,
     QTextCharFormat,
+    QTextCursor,
     QTextDocument,
 )
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -47,7 +49,7 @@ from src.core.parser import MarkdownAnalyzer
 from src.core.yaml_renderer import render_frontmatter_dict_to_html
 from src.utils.config import load_config, load_history, save_config, save_history
 from src.utils.file_association import associate_files, disassociate_files
-from src.utils.search import find_in_text
+from src.utils.search import SearchResult, find_in_text
 
 VIEW_RENDERED = "Rendered"
 VIEW_ORIGINAL = "Original"
@@ -74,27 +76,28 @@ def _is_system_dark_theme() -> bool:
 
 
 class _DropForwardPlainTextEdit(QPlainTextEdit):
-    """QPlainTextEdit that forwards file drops to a callback instead of inserting text."""
+    """QPlainTextEdit that ignores file drops and forwards normal text drops.
 
-    def __init__(self, drop_callback, parent=None):
+    File drops (URLs) are ignored so the event propagates to MainWindow.
+    This keeps ``_load_file`` → ``setPlainText`` out of the editor's own
+    ``dropEvent`` context — calling it there corrupts the editor's internal
+    state in Qt 5.15 (text cursor becomes invisible even after close/reopen).
+    """
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._drop_callback = drop_callback
+        # File drops handled by MainWindow; normal text drops use the default.
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+            event.ignore()          # let MainWindow handle file drops
         else:
             super().dragEnterEvent(event)
 
     def dropEvent(self, event):
         if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
-                path = url.toLocalFile()
-                if path:
-                    self._drop_callback(path)
-                    break
-            event.acceptProposedAction()
+            event.ignore()          # let MainWindow handle file drops
         else:
             super().dropEvent(event)
 
@@ -129,8 +132,9 @@ class _DropForwardTextBrowser(QTextBrowser):
 class MainWindow(QMainWindow):
     """Three-column: title nav | preview | source."""
 
-    def __init__(self) -> None:
+    def __init__(self, open_file_callback=None) -> None:
         super().__init__()
+        self._open_file_callback = open_file_callback
         self._content = ""
         self._filepath = ""
         self._parser = MarkdownAnalyzer()
@@ -157,6 +161,52 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)  # Enable drag & drop for files
         self._refresh_recent_menu()
 
+    def showEvent(self, event) -> None:
+        """Ensure source editor gets focus after the window is fully shown.
+
+        The QTreeWidget (created first in _build_ui) claims initial focus
+        when QMainWindow.show() runs, leaving the source cursor invisible.
+        This deferred setFocus runs AFTER show() has fully completed and
+        its initial focus assignment is done.
+        """
+        super().showEvent(event)
+        # Double QTimer.singleShot(0) pushes past the show-focus assignment,
+        # the layout-activation cycle, AND the cursor-initialization pass
+        # that Qt 5.15 on Windows runs during the first paint event.
+        QTimer.singleShot(0, self._source.setFocus)
+        QTimer.singleShot(0, self._source.ensureCursorVisible)
+        QTimer.singleShot(50, lambda: self._assert_cursor_healthy("showEvent"))
+
+    def _assert_cursor_healthy(self, context: str = "") -> None:
+        """Runtime check that the source cursor is in a healthy state.
+
+        Prints a warning if anything looks wrong — catches the Qt 5.15
+        ``setExtraSelections``-corrupts-cursor bug in development without
+        having to watch the screen.
+
+        **Read-only** — does NOT call setExtraSelections or otherwise
+        modify widget state, so it's safe to call while search highlights
+        are active. The actual workaround (``setTextCursor``) is placed
+        directly at each corruption site instead.
+
+        Call from every code path that might affect cursor rendering:
+        showEvent, _hide_find_dialog, _load_file, search methods, etc.
+        """
+        source = getattr(self, "_source", None)
+        if source is None:
+            return
+        issues: list[str] = []
+        try:
+            if not source.hasFocus():
+                issues.append("no focus")
+            if source.cursorWidth() <= 0:
+                issues.append(f"cursorWidth={source.cursorWidth()}")
+        except RuntimeError:
+            return  # wrapped C++ object deleted
+        if issues:
+            tag = f"[cursor:{context}]" if context else "[cursor]"
+            print(f"{tag} ⚠️  {'; '.join(issues)}")
+
     def _build_ui(self) -> None:
         """Build the three-column layout."""
         central = QWidget()
@@ -167,6 +217,8 @@ class MainWindow(QMainWindow):
 
         self._splitter = QSplitter(Qt.Horizontal)
         root.addWidget(self._splitter, 1)
+
+        font_size = self._config.get("font_size", 9)
 
         # Left: title tree with header bar (matches center column)
         left = QWidget()
@@ -182,6 +234,7 @@ class MainWindow(QMainWindow):
         lv.addWidget(left_header)
         self._title_tree = QTreeWidget()
         self._title_tree.setHeaderLabel("Titles")
+        self._title_tree.setFont(QFont("DengXian", font_size))
         self._title_tree.itemClicked.connect(self._on_title_clicked)
         lv.addWidget(self._title_tree, 1)
         self._splitter.addWidget(left)
@@ -208,11 +261,13 @@ class MainWindow(QMainWindow):
         self._source_header.installEventFilter(self)
         sv.addWidget(source_header)
         # Source editor
-        self._source = _DropForwardPlainTextEdit(self._load_file)
-        font_size = self._config.get("font_size", 9)
-        self._source.setFont(QFont("Consolas", font_size))
+        self._source = _DropForwardPlainTextEdit()
+        self._source.setFont(QFont("DengXian", font_size))
         self._source.textChanged.connect(self._on_source_changed)
         self._highlighter = MarkdownHighlighter(self._source.document())
+        # Force cursor width to fix invisible-cursor issue on Windows
+        # (some Qt builds / configs default to cursorWidth 0)
+        self._source.setCursorWidth(2)
         sv.addWidget(self._source, 1)
         self._splitter.addWidget(source_wrapper)
 
@@ -231,7 +286,7 @@ class MainWindow(QMainWindow):
         self._right_header.setAcceptDrops(True)
         self._right_header.installEventFilter(self)
         rv.addWidget(right_header)
-        self._preview = _DropForwardTextBrowser(self._load_file)
+        self._preview = _DropForwardTextBrowser(self._open_file)
         self._preview.setOpenExternalLinks(True)
         self._preview.setOpenLinks(False)
         self._preview.anchorClicked.connect(self._on_anchor_clicked)
@@ -259,28 +314,146 @@ class MainWindow(QMainWindow):
         search_layout.setSpacing(4)
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("Search...")
-        self._search_input.returnPressed.connect(self._do_search)
+        # Enter → next match; textChanged → live search
+        self._search_input.returnPressed.connect(self._search_next)
         self._search_input.textChanged.connect(self._on_search_text_changed)
         search_layout.addWidget(self._search_input)
         self._search_label = QLabel("")
         search_layout.addWidget(self._search_label)
         btn_prev = QPushButton("\u25b2")  # up triangle
-        btn_prev.setFixedWidth(24)
+        btn_prev.setFixedWidth(52)
         btn_prev.clicked.connect(self._search_previous)
         search_layout.addWidget(btn_prev)
         btn_next = QPushButton("\u25bc")  # down triangle
-        btn_next.setFixedWidth(24)
+        btn_next.setFixedWidth(52)
         btn_next.clicked.connect(self._search_next)
         search_layout.addWidget(btn_next)
         btn_close = QPushButton("\u2715")  # x
-        btn_close.setFixedWidth(24)
+        btn_close.setFixedWidth(52)
         btn_close.clicked.connect(lambda: self._search_bar.hide())
         search_layout.addWidget(btn_close)
         self._search_bar.hide()
-        root.addWidget(self._search_bar)
-        # Ctrl+F shortcut
+        # Not added to root — will live in a floating popup dialog
+
+        # Replace bar (hidden by default, toggled by Ctrl+H)
+        self._replace_bar = QFrame()
+        replace_layout = QHBoxLayout(self._replace_bar)
+        replace_layout.setContentsMargins(4, 2, 4, 2)
+        replace_layout.setSpacing(4)
+        self._replace_input = QLineEdit()
+        self._replace_input.setPlaceholderText("Replace with...")
+        self._replace_input.returnPressed.connect(self._do_replace)
+        # Tab between search and replace inputs
+        self._search_input.installEventFilter(self)
+        self._replace_input.installEventFilter(self)
+        replace_layout.addWidget(self._replace_input)
+        btn_replace = QPushButton("Replace")
+        btn_replace.setFixedWidth(120)
+        btn_replace.clicked.connect(self._do_replace)
+        replace_layout.addWidget(btn_replace)
+        btn_replace_all = QPushButton("All")
+        btn_replace_all.setFixedWidth(70)
+        btn_replace_all.clicked.connect(self._do_replace_all)
+        replace_layout.addWidget(btn_replace_all)
+        btn_replace_close = QPushButton("\u2715")
+        btn_replace_close.setFixedWidth(52)
+        replace_layout.addWidget(btn_replace_close)
+        self._replace_bar.hide()
+        # Not added to root — will live in a floating popup dialog
+
+        # Floating find/replace popup (not embedded in the main layout)
+        self._find_dialog = QDialog(self, Qt.Tool | Qt.WindowStaysOnTopHint)
+        self._find_dialog.setWindowFlags(
+            Qt.Tool | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint
+        )
+        self._find_dialog.setAttribute(Qt.WA_TranslucentBackground)
+        dialog_outer = QVBoxLayout(self._find_dialog)
+        dialog_outer.setContentsMargins(0, 0, 0, 0)
+        dialog_outer.setSpacing(0)
+
+        # Container with subtle border and background
+        container = QFrame()
+        container.setObjectName("findPopup")
+        container.setStyleSheet(
+            "QFrame#findPopup {"
+            "  background-color: #ffffff;"
+            "  border: 1px solid #c0c0c0;"
+            "  border-radius: 12px;"
+            "}"
+            "QLineEdit {"
+            "  color: #000000;"
+            "  background-color: #f5f5f5;"
+            "  border: 1px solid #d0d0d0;"
+            "  border-radius: 8px;"
+            "  padding: 16px 22px;"
+            "  font-size: 24px;"
+            "  min-width: 450px;"
+            "  min-height: 30px;"
+            "}"
+            "QLineEdit:focus {"
+            "  border: 2px solid #0078d4;"
+            "  background-color: #ffffff;"
+            "}"
+            "QPushButton {"
+            "  color: #000000;"
+            "  background-color: #e8e8e8;"
+            "  border: 1px solid #c0c0c0;"
+            "  border-radius: 8px;"
+            "  padding: 14px 22px;"
+            "  font-size: 18px;"
+            "  min-width: 52px;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: #d4d4d4;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #b8b8b8;"
+            "}"
+            "QLabel {"
+            "  color: #333333;"
+            "  font-size: 18px;"
+            "  min-width: 80px;"
+            "  qproperty-alignment: AlignCenter;"
+            "}"
+        )
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(16, 12, 16, 12)
+        container_layout.setSpacing(10)
+
+        # Wire close buttons to hide the dialog
+        btn_close.clicked.connect(self._hide_find_dialog)
+        btn_replace_close.clicked.connect(self._hide_find_dialog)
+
+        container_layout.addWidget(self._search_bar)
+        # Visual separator between search and replace rows
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("color: #e0e0e0; margin: 2px 0;")
+        container_layout.addWidget(separator)
+        container_layout.addWidget(self._replace_bar)
+        dialog_outer.addWidget(container)
+
+        # Escape closes the popup
+        shortcut_popup_escape = QShortcut(QKeySequence(Qt.Key_Escape), self._find_dialog)
+        shortcut_popup_escape.activated.connect(self._hide_find_dialog)
+
+        # Enter → next match (dialog-level, works no matter which child has focus)
+        shortcut_enter = QShortcut(QKeySequence(Qt.Key_Return), self._find_dialog)
+        shortcut_enter.setContext(Qt.WidgetWithChildrenShortcut)
+        shortcut_enter.activated.connect(self._on_dialog_enter)
+        shortcut_kp_enter = QShortcut(QKeySequence(Qt.Key_Enter), self._find_dialog)
+        shortcut_kp_enter.setContext(Qt.WidgetWithChildrenShortcut)
+        shortcut_kp_enter.activated.connect(self._on_dialog_enter)
+
+        # Ctrl+F shortcut (ApplicationShortcut so it works even when the popup has focus)
         shortcut_search = QShortcut(QKeySequence.Find, self)
+        shortcut_search.setContext(Qt.ApplicationShortcut)
         shortcut_search.activated.connect(self._toggle_search_bar)
+        # Ctrl+H shortcut
+        shortcut_replace = QShortcut(QKeySequence("Ctrl+H"), self)
+        shortcut_replace.setContext(Qt.ApplicationShortcut)
+        shortcut_replace.activated.connect(self._toggle_replace_bar)
 
     def _build_menubar(self) -> None:
         bar = self.menuBar()
@@ -418,6 +591,19 @@ class MainWindow(QMainWindow):
     def _on_open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open File", "", FILE_MASK)
         if path:
+            self._open_file(path)
+
+    def _open_file(self, path: str) -> None:
+        """Open a file, routing through app-level dedup if available.
+
+        User-facing paths (File → Open, drag-drop, Recent menu) call
+        this instead of ``_load_file`` directly.  When an app-level
+        callback is wired, duplicate files focus the existing window
+        instead of loading a second copy.
+        """
+        if self._open_file_callback:
+            self._open_file_callback(path)
+        else:
             self._load_file(path)
 
     def _load_file(self, path: str) -> None:
@@ -446,6 +632,15 @@ class MainWindow(QMainWindow):
         self._title_tree.clear()
         self._build_title_tree()
         self._source.setPlainText(content)
+        # Immediate focus for post-show calls (drag-drop, File → Open).
+        # The drop event restores focus to the target widget after _load_file
+        # returns, so a timer-based setFocus arrives too late.
+        self._source.setFocus()
+        self._source.ensureCursorVisible()
+        # Qt 5.15 workaround: setPlainText + setExtraSelections can corrupt
+        # cursor rendering.  Reset the cursor immediately.
+        self._source.setExtraSelections([])
+        self._source.setTextCursor(self._source.textCursor())
         ft = detect_file(path)
         line_info = f", {len(self._current_titles)} headings" if ft == FileType.MARKDOWN else ""
         # Restore scroll position if previously saved
@@ -453,6 +648,12 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{fname}  |  {len(content)} chars{line_info}")
         self._add_to_history(path)
         self._refresh_recent_menu()
+        # Deferred focus for the pre-show case (called from _create_window
+        # before win.show()).  The immediate setFocus above is queued but
+        # then overwritten by show()'s initial focus assignment.
+        QTimer.singleShot(0, self._source.setFocus)
+        QTimer.singleShot(0, self._source.ensureCursorVisible)
+        QTimer.singleShot(50, lambda: self._assert_cursor_healthy("loadFile"))
 
     def _build_title_tree(self) -> None:
         if not self._current_titles:
@@ -565,7 +766,7 @@ class MainWindow(QMainWindow):
                 continue
             a = QAction(Path(p).name, self)
             a.setToolTip(p)
-            a.triggered.connect(lambda _, pp=p: self._load_file(pp))
+            a.triggered.connect(lambda _, pp=p: self._open_file(pp))
             self._recent_menu.addAction(a)
         self._recent_menu.addSeparator()
         ca = QAction("Clear History", self)
@@ -592,7 +793,7 @@ class MainWindow(QMainWindow):
             for url in event.mimeData().urls():
                 file_path = url.toLocalFile()
                 if file_path and Path(file_path).is_file():
-                    self._load_file(file_path)
+                    self._open_file(file_path)
                     break
             event.acceptProposedAction()
         else:
@@ -610,7 +811,7 @@ class MainWindow(QMainWindow):
                 for url in event.mimeData().urls():
                     path = url.toLocalFile()
                     if path and Path(path).exists():
-                        self._load_file(path)
+                        self._open_file(path)
                         break
                 event.acceptProposedAction()
                 return True
@@ -626,9 +827,31 @@ class MainWindow(QMainWindow):
                 for url in event.mimeData().urls():
                     path = url.toLocalFile()
                     if path and Path(path).exists():
-                        self._load_file(path)
+                        self._open_file(path)
                         break
                 event.acceptProposedAction()
+                return True
+        # Tab navigation between search and replace inputs
+        if (
+            obj in (getattr(self, "_search_input", None), getattr(self, "_replace_input", None))
+            and event.type() == QEvent.KeyPress
+        ):
+            if event.key() == Qt.Key_Tab:
+                if obj is self._search_input and self._replace_bar.isVisible():
+                    self._replace_input.setFocus()
+                    self._replace_input.selectAll()
+                    return True
+                if obj is self._replace_input:
+                    self._search_input.setFocus()
+                    self._search_input.selectAll()
+                    return True
+            # Shift+Enter in search input → previous match
+            if (
+                obj is self._search_input
+                and event.key() == Qt.Key_Return
+                and event.modifiers() == Qt.ShiftModifier
+            ):
+                self._search_previous()
                 return True
         return super().eventFilter(obj, event)
 
@@ -860,24 +1083,65 @@ class MainWindow(QMainWindow):
         self._source.clear()
         self._preview.clear()
         self._title_tree.clear()
-        self._search_results = []
-        self._search_index = 0
         self._search_input.clear()
-        self._search_label.setText("")
-        self._source.setExtraSelections([])
+        self._replace_input.clear()
+        self._replace_bar.hide()
+        self._hide_find_dialog()
         self.setWindowTitle("Markdown Viewer")
         self.statusBar().showMessage("Ready")
 
     # ---- Search ----
 
+    def _hide_find_dialog(self) -> None:
+        """Hide the find/replace popup and clear search highlights."""
+        self._search_results = []
+        self._search_index = 0
+        self._source.setExtraSelections([])
+        # Qt 5.15 workaround: setExtraSelections can corrupt cursor rendering
+        self._source.setTextCursor(self._source.textCursor())
+        self._search_label.setText("")
+        self._find_dialog.hide()
+        # Restore focus to the editor so the text cursor appears
+        self._source.setFocus()
+        self._assert_cursor_healthy("hideFind")
+
+    def _on_dialog_enter(self) -> None:
+        """Handle Enter key in the find dialog → next match.
+
+        Works no matter which child of the dialog has focus (input, label, etc.).
+        Does NOT fire when a QPushButton has focus — Qt handles that internally.
+        """
+        if not self._search_results:
+            return
+        # Don't steal Enter from focused buttons (they handle it as click)
+        focused = QApplication.focusWidget()
+        if focused is not None and isinstance(focused, QPushButton):
+            return
+        self._search_next()
+
     def _toggle_search_bar(self) -> None:
-        """Toggle search bar visibility."""
-        if self._search_bar.isVisible():
-            self._search_bar.hide()
+        """Toggle find/replace popup visibility."""
+        if self._find_dialog.isVisible():
+            self._hide_find_dialog()
         else:
+            self._replace_bar.hide()
+            # Explicitly show the search bar — it was hidden during init,
+            # and QWidget.show() does NOT override explicit hide() on children.
             self._search_bar.show()
+            self._find_dialog.show()
+            self._find_dialog.raise_()
+            self._find_dialog.activateWindow()
+            self._position_find_dialog()
             self._search_input.setFocus()
             self._search_input.selectAll()
+
+    def _position_find_dialog(self) -> None:
+        """Position the popup at the top of the source editor, right-aligned."""
+        source_top_left = self._source.mapToGlobal(QPoint(0, 0))
+        dialog_width = self._find_dialog.sizeHint().width()
+        x = source_top_left.x() + self._source.width() - dialog_width
+        y = source_top_left.y()
+        self._find_dialog.move(max(x, 0), y)
 
     def _on_search_text_changed(self, text: str) -> None:
         """Live search as user types."""
@@ -887,7 +1151,9 @@ class MainWindow(QMainWindow):
             self._search_results = []
             self._search_index = 0
             self._search_label.setText("")
-            self._source.extraSelections([])
+            self._source.setExtraSelections([])
+            # Qt 5.15 workaround: setExtraSelections can corrupt cursor rendering
+            self._source.setTextCursor(self._source.textCursor())
 
     def _do_search(self) -> None:
         """Execute search and update highlight + label."""
@@ -902,6 +1168,8 @@ class MainWindow(QMainWindow):
         else:
             self._search_label.setText("0/0")
             self._source.setExtraSelections([])
+            # Qt 5.15 workaround: setExtraSelections can corrupt cursor rendering
+            self._source.setTextCursor(self._source.textCursor())
 
     def _search_next(self) -> None:
         """Move to next search match."""
@@ -923,38 +1191,129 @@ class MainWindow(QMainWindow):
         )
         self._jump_to_search_result(self._search_index)
 
+    def _cursor_at_result(self, result: SearchResult) -> QTextCursor:
+        """Create a cursor positioned at a SearchResult using absolute block positioning.
+
+        Uses QTextDocument.findBlockByNumber() instead of movePosition(Down, …)
+        because Down moves by visual lines (wrapped lines) rather than document
+        blocks, causing off-by-N positioning on wrapped lines.
+        """
+        doc = self._source.document()
+        block = doc.findBlockByNumber(result.line_no - 1)
+        if not block.isValid():
+            # Fallback: return cursor at document start
+            return QTextCursor(doc)
+        cursor = QTextCursor(doc)
+        pos = block.position() + result.column - 1
+        cursor.setPosition(pos)
+        cursor.movePosition(cursor.Right, cursor.KeepAnchor, len(result.text))
+        return cursor
+
     def _jump_to_search_result(self, index: int) -> None:
         """Jump editor cursor to the given search result index."""
         if index < 0 or index >= len(self._search_results):
             return
         result = self._search_results[index]
-        cursor = self._source.textCursor()
-        cursor.movePosition(cursor.Start)
-        cursor.movePosition(cursor.Down, cursor.MoveAnchor, result.line_no - 1)
-        cursor.movePosition(cursor.Right, cursor.MoveAnchor, result.column - 1)
-        cursor.movePosition(cursor.Right, cursor.KeepAnchor, len(result.text))
+        cursor = self._cursor_at_result(result)
         self._source.setTextCursor(cursor)
         self._source.ensureCursorVisible()
+        self._assert_cursor_healthy("jumpSearch")
 
     def _highlight_search_results(self) -> None:
         """Highlight all search matches in the editor."""
         selections = []
         for result in self._search_results:
-            cursor = self._source.textCursor()
-            cursor.movePosition(cursor.Start)
-            cursor.movePosition(cursor.Down, cursor.MoveAnchor, result.line_no - 1)
-            cursor.movePosition(cursor.Right, cursor.MoveAnchor, result.column - 1)
-            cursor.movePosition(cursor.Right, cursor.KeepAnchor, len(result.text))
+            cursor = self._cursor_at_result(result)
             sel = QTextEdit.ExtraSelection()
             sel.cursor = cursor
             sel.format.setBackground(QColor(255, 255, 0))  # yellow highlight
             selections.append(sel)
         self._source.setExtraSelections(selections)
+        # Qt 5.15 workaround: setExtraSelections can corrupt cursor rendering;
+        # reset the cursor immediately so it stays visible while the popup is open.
+        self._source.setTextCursor(self._source.textCursor())
+
+    # ---- Replace (Ctrl+H) ----
+
+    def _toggle_replace_bar(self) -> None:
+        """Toggle replace row visibility inside the find/replace popup."""
+        if self._find_dialog.isVisible() and self._replace_bar.isVisible():
+            self._hide_find_dialog()
+            return
+        if not self._find_dialog.isVisible():
+            # Explicitly show the search bar — hidden during init, and
+            # QWidget.show() does not override explicit hide() on children.
+            self._search_bar.show()
+            self._find_dialog.show()
+            self._find_dialog.raise_()
+            self._find_dialog.activateWindow()
+            self._position_find_dialog()
+        self._replace_bar.show()
+        self._replace_input.setFocus()
+        self._replace_input.selectAll()
+
+    def _do_replace(self) -> None:
+        """Replace the current search match and advance to the next."""
+        if not self._search_results or self._search_index >= len(self._search_results):
+            return
+        replace_text = self._replace_input.text()
+        cursor = self._source.textCursor()
+        if not cursor.hasSelection():
+            return
+        selected = cursor.selectedText()
+        query = self._search_input.text()
+        # Confirm the cursor selection matches the current search result
+        if query.casefold() not in selected.casefold():
+            return
+
+        total_before = len(self._search_results)
+        # Replace the selected text
+        cursor.insertText(replace_text)
+        # Re-run search on updated content
+        self._do_search()
+        # Advance to the next match (same index, which now points to the next result)
+        if self._search_results:
+            idx = min(self._search_index, len(self._search_results) - 1)
+            self._search_index = idx
+            self._jump_to_search_result(idx)
+            self._search_label.setText(
+                f"{idx + 1}/{len(self._search_results)}"
+            )
+            self.statusBar().showMessage(
+                f"Replaced 1 of {total_before}", 2000
+            )
+
+    def _do_replace_all(self) -> None:
+        """Replace all search matches in the document."""
+        query = self._search_input.text()
+        replace_text = self._replace_input.text()
+        if not query:
+            return
+        # Re-run search to get fresh results
+        self._do_search()
+        if not self._search_results:
+            self.statusBar().showMessage("No matches to replace", 2000)
+            return
+
+        total = len(self._search_results)
+        cursor = self._source.textCursor()
+        cursor.beginEditBlock()  # group all replacements as a single undo step
+
+        # Work bottom-up so earlier positions stay valid after each replace
+        for result in reversed(self._search_results):
+            cur = self._cursor_at_result(result)
+            cur.insertText(replace_text)
+
+        cursor.endEditBlock()
+
+        # Re-run search on the updated content
+        self._do_search()
+        self.statusBar().showMessage(f"Replaced {total} occurrence(s)", 3000)
 
     def keyPressEvent(self, event) -> None:
-        """Handle Escape to close search bar."""
-        if event.key() == Qt.Key_Escape and self._search_bar.isVisible():
-            self._search_bar.hide()
+        """Handle Escape to close search/replace popup."""
+        if event.key() == Qt.Key_Escape and self._find_dialog.isVisible():
+            self._hide_find_dialog()
             return
         super().keyPressEvent(event)
 
@@ -1056,7 +1415,10 @@ class MainWindow(QMainWindow):
             self.statusBar().setStyleSheet("")
             app.setStyleSheet(
                 f"QMainWindow {{ background-color: {bg}; }}"
-                f"QPlainTextEdit {{ background-color: {bg}; color: {fg}; }}"
+                # Note: QPlainTextEdit deliberately omitted from stylesheet —
+                # setting `color` via stylesheet causes cursor rendering to
+                # break on some Qt 5.15 / Windows builds (cursor bitmap not
+                # initialized). Palette Base + Text roles handle the colors.
                 f"QTextBrowser {{ background-color: {bg}; color: {fg}; }}"
                 f"QTreeWidget {{ background-color: {bg}; color: {fg}; }}"
                 f"QTreeWidget::item {{ color: {fg}; }}"
@@ -1200,12 +1562,10 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         if self._dark_mode:
             self._default_color = QColor(220, 220, 220)  # light gray for regular text
             heading_color = QColor(100, 180, 255)  # bright blue
-            list_color = QColor(180, 180, 180)  # light gray
             code_color = QColor(100, 180, 255)  # bright blue
         else:
             self._default_color = QColor(0, 0, 0)  # black for regular text
             heading_color = QColor(0, 120, 215)  # standard blue
-            list_color = QColor(100, 100, 100)  # medium gray
             code_color = QColor(0, 120, 215)  # standard blue
 
         # Heading formats (h1-h6): bold + color
@@ -1215,15 +1575,10 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             fmt.setFontWeight(QFont.Bold)
             self._rules.append((f"^#{'#' * (level - 1)}\\s.+", fmt))
 
-        # List items
-        fmt_list = QTextCharFormat()
-        fmt_list.setForeground(list_color)
-        self._rules.append(("^[\\*\\-]\\s.+", fmt_list))
-
         # Fenced code block
         fmt_code = QTextCharFormat()
         fmt_code.setForeground(code_color)
-        fmt_code.setFontFamily("Consolas")
+        fmt_code.setFontFamily("DengXian")
         self._rules.append(("^```.+", fmt_code))
 
     def highlightBlock(self, text: str) -> None:

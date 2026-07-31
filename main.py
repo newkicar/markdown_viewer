@@ -1,8 +1,9 @@
 """Markdown Viewer — entry point with multi-window support."""
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtWidgets import QApplication
 
@@ -19,6 +20,8 @@ class MarkdownViewerApp:
         self.app = QApplication(sys.argv)
         self.app.setApplicationName("Markdown Viewer")
         self.app.setOrganizationName("MarkdownViewer")
+        # Use DengXian (等线) as the application-wide default font
+        self.app.setFont(QFont("DengXian", 9))
         # Set application window icon from bundled assets
         # Use sys._MEIPASS for PyInstaller-bundled resources; fall back to dev path
         if getattr(sys, "frozen", False):
@@ -34,8 +37,12 @@ class MarkdownViewerApp:
     # Window management
     # ------------------------------------------------------------------
     def _create_window(self, filepath: str | None = None) -> MainWindow:
-        """Create a new window, optionally loading a file."""
-        win = MainWindow()
+        """Create a new window, optionally loading a file.
+
+        Wires up the file-open callback so user actions in this window
+        check for duplicates before opening.
+        """
+        win = MainWindow(open_file_callback=self._make_open_file_callback())
         if filepath:
             win._load_file(filepath)
         win.show()
@@ -43,6 +50,43 @@ class MarkdownViewerApp:
         # Remove from tracking list when the window is destroyed
         win.destroyed.connect(lambda: self._remove_window(win))
         return win
+
+    def _make_open_file_callback(self) -> Callable[[str], None]:
+        """Return a closure that deduplicates file opens across all windows.
+
+        The closure captures ``self`` so each MainWindow can delegate
+        its user-facing file-open paths through the app-level check.
+        """
+        app = self
+
+        def _open_file(path: str) -> None:
+            app._open_file_in_window(path)
+
+        return _open_file
+
+    def _open_file_in_window(self, filepath: str) -> None:
+        """Open a file, focusing existing window if already open.
+
+        Unlike ``open_file`` (which always creates a new window for
+        unseen files), this method lets the *originating* window load
+        the file when it isn't open elsewhere.  The originating window
+        is determined by ``QApplication.activeWindow()``.
+        """
+        normalized = str(Path(filepath).resolve()).lower()
+        active = QApplication.activeWindow()
+        for win in self.windows:
+            if win is active:
+                continue
+            if hasattr(win, "_filepath") and win._filepath:
+                if str(Path(win._filepath).resolve()).lower() == normalized:
+                    self._focus_window(win)
+                    return
+        # Not open elsewhere → load in the originating window
+        if active is not None and hasattr(active, "_load_file"):
+            active._load_file(filepath)
+        else:
+            # Fallback (shouldn't happen in practice)
+            self._create_window(filepath)
 
     def _remove_window(self, win: MainWindow) -> None:
         """Remove window from tracking list."""
