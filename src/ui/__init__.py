@@ -153,125 +153,138 @@ def _find_popup_style(dark: bool, accent: str) -> str:
     reach it — colors must come from QSS.  One template, two color sets:
     mirrors how the preview's default stylesheet is themed in _apply_theme.
 
-    Compact-modern layout: input and buttons share one ~34px row height, the
-    icon buttons (▲▼✕) are flat (transparent until hover), the Replace button
-    is the accent-colored primary action, and the result counter turns red on
-    no match via the [error="true"] property selector — the color stays in
-    QSS, the logic only toggles the property.
+    Compact-modern layout: input fields use elastic width (flex:1), buttons
+    are compact (32px), the drag handle is a thin grip line, and the result
+    counter turns red on no match via the [error="true"] property selector.
     """
     if dark:
         c = {
-            "popup_bg": "#2a2a2a",
-            "popup_border": "#555555",
+            "popup_bg": "#1e1e2e",
+            "popup_border": "rgba(255,255,255,0.08)",
             "text": "#e0e0e0",
-            "field_bg": "#3a3a3a",
-            "field_focus_bg": "#3a3a3a",
-            "btn_hover": "#4a4a4a",
-            "btn_pressed": "#5a5a5a",
-            "label": "#c0c0c0",
-            "count": "#9a9a9a",
+            "field_bg": "rgba(255,255,255,0.05)",
+            "field_border": "rgba(255,255,255,0.1)",
+            "field_focus_bg": "rgba(255,255,255,0.05)",
+            "btn_hover": "rgba(255,255,255,0.08)",
+            "btn_pressed": "rgba(255,255,255,0.12)",
+            "label": "#888888",
+            "count": "#666666",
             "error": "#ff5555",
-            "sep": "#4a4a4a",
-            "handle_bg": "#333333",
-            "handle_hover": "#3f3f3f",
-            "handle_text": "#9a9a9a",
+            "sep": "rgba(255,255,255,0.06)",
+            "handle_bg": "rgba(255,255,255,0.03)",
+            "handle_hover": "rgba(255,255,255,0.06)",
+            "grip": "rgba(255,255,255,0.15)",
+            "grip_hover": "rgba(255,255,255,0.25)",
+            "secondary_bg": "rgba(255,255,255,0.06)",
+            "secondary_text": "#aaaaaa",
         }
     else:
         c = {
             "popup_bg": "#ffffff",
-            "popup_border": "#d0d0d0",
-            "text": "#000000",
+            "popup_border": "#e0e0e0",
+            "text": "#333333",
             "field_bg": "#f5f5f5",
-            "field_focus_bg": "#ffffff",
-            "btn_hover": "#e4e4e4",
-            "btn_pressed": "#cccccc",
-            "label": "#333333",
-            "count": "#888888",
+            "field_border": "#dddddd",
+            "field_focus_bg": "#f5f5f5",
+            "btn_hover": "#f0f0f0",
+            "btn_pressed": "#e8e8e8",
+            "label": "#888888",
+            "count": "#999999",
             "error": "#e81123",
-            "sep": "#e0e0e0",
-            "handle_bg": "#f0f0f0",
-            "handle_hover": "#e4e4e4",
-            "handle_text": "#888888",
+            "sep": "#eeeeee",
+            "handle_bg": "#f5f5f5",
+            "handle_hover": "#eeeeee",
+            "grip": "#cccccc",
+            "grip_hover": "#aaaaaa",
+            "secondary_bg": "#f0f0f0",
+            "secondary_text": "#666666",
         }
     # Primary-button hover is derived from the accent (not a hardcoded value).
     accent_hover = QColor(accent).darker(115).name()
+    accent_pressed = QColor(accent).darker(130).name()
     return (
+        # --- Popup container ---
         f"QFrame#findPopup {{"
         f"  background-color: {c['popup_bg']};"
         f"  border: 1px solid {c['popup_border']};"
-        "  border-radius: 18px;"
+        "  border-radius: 24px;"
         "}"
-        # Drag handle sits at the top of the popup; its own background makes
-        # it clearly visible as a grab target (the user must notice it to know
-        # the popup can be dragged at all).
+        # --- Drag handle: thin grip line instead of ≡ symbol ---
         f"QFrame#findDragHandle {{"
         f"  background-color: {c['handle_bg']};"
         "  border: none;"
-        f"  border-bottom: 1px solid {c['popup_border']};"
-        "  border-top-left-radius: 18px;"
-        "  border-top-right-radius: 18px;"
-        f"  color: {c['handle_text']};"
-        "  font-size: 15px;"
+        f"  border-bottom: 1px solid {c['sep']};"
+        "  border-top-left-radius: 24px;"
+        "  border-top-right-radius: 24px;"
         "}"
         f"QFrame#findDragHandle:hover {{ background-color: {c['handle_hover']}; }}"
-        # Shared input/button sizing keeps one ~34px-tall row.
+        # --- Input fields: elastic width, wider horizontal padding ---
         "QLineEdit {"
         f"  color: {c['text']};"
         f"  background-color: {c['field_bg']};"
-        f"  border: 1px solid {c['popup_border']};"
-        "  border-radius: 9px;"
-        "  padding: 10px 18px;"
-        "  font-size: 21px;"
-        "  min-width: 540px;"
+        f"  border: 1px solid {c['field_border']};"
+        "  border-radius: 16px;"
+        "  padding: 12px 20px;"
+        "  font-size: 28px;"
+        "  min-height: 44px;"
+        f"  selection-background-color: {accent};"
         "}"
         "QLineEdit:focus {"
-        f"  border: 2px solid {accent};"
+        f"  border: 1px solid {accent};"
         f"  background-color: {c['field_focus_bg']};"
         "}"
-        # Buttons are flat by default; per-role styling below gives feedback.
+        # --- Buttons: compact horizontal padding ---
         "QPushButton {"
-        f"  color: {c['text']};"
+        f"  color: {c['label']};"
         "  background-color: transparent;"
         "  border: none;"
-        "  border-radius: 9px;"
-        "  padding: 9px 18px;"
-        "  font-size: 21px;"
-        "  min-height: 33px;"
+        "  border-radius: 12px;"
+        "  padding: 8px 14px;"
+        "  font-size: 28px;"
+        "  min-height: 44px;"
         "}"
-        f"QPushButton:hover {{ background-color: {c['btn_hover']}; }}"
+        f"QPushButton:hover {{ background-color: {c['btn_hover']}; color: {c['text']}; }}"
         f"QPushButton:pressed {{ background-color: {c['btn_pressed']}; }}"
-        # Prev/next navigation: flat icon buttons, hover only.
-        "QPushButton#findNavBtn { font-size: 20px; }"
-        # Close: flat, but hover turns red so the user reads it as destructive.
-        f"QPushButton#findCloseBtn:hover {{ background-color: {c['error']}; color: #ffffff; }}"
-        # Replace is the primary action: accent background + white text.
+        # Nav buttons (▲▼): compact
+        "QPushButton#findNavBtn { font-size: 24px; min-width: 44px; max-width: 44px; }"
+        # Close button: red on hover
+        f"QPushButton#findCloseBtn {{ font-size: 26px; min-width: 44px; max-width: 44px; }}"
+        f"QPushButton#findCloseBtn:hover {{ background-color: rgba({QColor(c['error']).red()},{QColor(c['error']).green()},{QColor(c['error']).blue()},0.15); color: {c['error']}; }}"
+        # Replace button: accent primary
         f"QPushButton#findPrimaryBtn {{"
         f"  background-color: {accent};"
         "  color: #ffffff;"
-        "  font-weight: bold;"
+        "  font-weight: 600;"
+        "  font-size: 26px;"
+        "  padding: 8px 20px;"
+        "  min-height: 44px;"
         "}"
         f"QPushButton#findPrimaryBtn:hover {{ background-color: {accent_hover}; }}"
-        f"QPushButton#findPrimaryBtn:pressed {{ background-color: {QColor(accent).darker(130).name()}; }}"
-        # Replace All is secondary: outlined, lighter than primary.
-        # No border so its height matches the borderless icon buttons
-        # (1px border would add 2px and break the shared row height).
+        f"QPushButton#findPrimaryBtn:pressed {{ background-color: {accent_pressed}; }}"
+        # Replace All button: secondary style
         "QPushButton#findSecondaryBtn {"
-        f"  background-color: {c['field_bg']};"
+        f"  background-color: {c['secondary_bg']};"
+        f"  color: {c['secondary_text']};"
+        "  font-size: 26px;"
+        "  padding: 8px 20px;"
+        "  min-height: 44px;"
         "}"
-        f"QPushButton#findSecondaryBtn:hover {{ background-color: {c['btn_hover']}; }}"
+        f"QPushButton#findSecondaryBtn:hover {{ background-color: {c['btn_hover']}; color: {c['text']}; }}"
+        # --- Labels ---
         "QLabel {"
         f"  color: {c['label']};"
-        "  font-size: 21px;"
+        "  font-size: 24px;"
         "}"
-        # Result counter: small, quiet, turns red when there is no match.
+        # Result counter: tabular-nums, turns red on no match
         f"QLabel#findCount {{"
         f"  color: {c['count']};"
-        "  font-size: 18px;"
-        "  min-width: 0;"
+        "  font-size: 20px;"
+        "  min-width: 48px;"
         "  padding: 0 6px;"
         "}"
         f"QLabel#findCount[error=\"true\"] {{ color: {c['error']}; font-weight: bold; }}"
-        f"QFrame#findSeparator {{ color: {c['sep']}; margin: 3px 0 9px 0; }}"
+        # Separator: thin 1px line
+        f"QFrame#findSeparator {{ background-color: {c['sep']}; border: none; max-height: 1px; margin: 12px 0; }}"
     )
 
 
@@ -285,22 +298,55 @@ class _DragHandle(QFrame):
     sees presses on the inputs, so dragging there would only work in the
     padding gaps.  This handle has no interactive children, so every press on
     it reaches mousePressEvent reliably.
+
+    Visual: a thin centered grip line (like VS Code / macOS title bar).
     """
 
     def __init__(self, dialog, parent=None):
         super().__init__(parent)
         self._dialog = dialog
         self._drag_pos = None
-        self.setFixedHeight(21)
+        self.setFixedHeight(36)
         self.setCursor(Qt.OpenHandCursor)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        grip = QLabel("\u2261")  # ≡, a grip glyph hinting "grab here"
-        grip.setAlignment(Qt.AlignCenter)
-        # The glyph is decorative only; make it fully transparent to mouse
-        # events so presses always reach this handle.
-        grip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        layout.addWidget(grip)
+
+    def paintEvent(self, event) -> None:
+        """Draw a thin centered grip line (like VS Code / macOS title bar)."""
+        from PyQt5.QtGui import QPen
+
+        painter = self._grip_painter()
+        if painter is None:
+            return
+        try:
+            w = self.width()
+            h = self.height()
+            grip_width = min(72, w // 4)
+            x = (w - grip_width) // 2
+            y = h // 2
+            painter.drawLine(x, y, x + grip_width, y)
+        finally:
+            painter.end()
+
+    def _grip_painter(self):
+        """Create a QPainter for the grip line, handling wrapped C++ deletion."""
+        from PyQt5.QtGui import QColor, QPainter, QPen
+
+        try:
+            painter = QPainter(self)
+        except RuntimeError:
+            return None
+        # Derive grip color from the current palette (works for both themes)
+        pal = self.palette()
+        base = pal.color(self.backgroundRole())
+        # Grip is a lighter/darker variant of the background
+        if base.lightness() < 128:
+            grip_color = base.lighter(180)
+        else:
+            grip_color = base.darker(150)
+        grip_color.setAlpha(100)
+        pen = QPen(grip_color, 2, Qt.SolidLine, Qt.RoundCap)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setPen(pen)
+        return painter
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
@@ -515,13 +561,10 @@ class MainWindow(QMainWindow):
         # Search bar (hidden by default, toggled by Ctrl+F)
         self._search_bar = QFrame()
         search_layout = QHBoxLayout(self._search_bar)
-        search_layout.setContentsMargins(4, 2, 4, 2)
-        search_layout.setSpacing(4)
+        search_layout.setContentsMargins(8, 4, 8, 4)
+        search_layout.setSpacing(6)
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("Search...")
-        # Fixed height: 10% taller than the button row (~51px) so the input
-        # reads as the dominant field in the bar.
-        self._search_input.setFixedHeight(56)
         # Enter → next match; textChanged → live search
         self._search_input.returnPressed.connect(self._search_next)
         self._search_input.textChanged.connect(self._on_search_text_changed)
@@ -531,17 +574,14 @@ class MainWindow(QMainWindow):
         search_layout.addWidget(self._search_label)
         btn_prev = QPushButton("\u25b2")  # up triangle
         btn_prev.setObjectName("findNavBtn")
-        btn_prev.setFixedWidth(48)
         btn_prev.clicked.connect(self._search_previous)
         search_layout.addWidget(btn_prev)
         btn_next = QPushButton("\u25bc")  # down triangle
         btn_next.setObjectName("findNavBtn")
-        btn_next.setFixedWidth(48)
         btn_next.clicked.connect(self._search_next)
         search_layout.addWidget(btn_next)
         btn_close = QPushButton("\u2715")  # x
         btn_close.setObjectName("findCloseBtn")
-        btn_close.setFixedWidth(48)
         btn_close.clicked.connect(lambda: self._search_bar.hide())
         search_layout.addWidget(btn_close)
         self._search_bar.hide()
@@ -550,11 +590,10 @@ class MainWindow(QMainWindow):
         # Replace bar (hidden by default, toggled by Ctrl+H)
         self._replace_bar = QFrame()
         replace_layout = QHBoxLayout(self._replace_bar)
-        replace_layout.setContentsMargins(4, 2, 4, 2)
-        replace_layout.setSpacing(4)
+        replace_layout.setContentsMargins(8, 4, 8, 4)
+        replace_layout.setSpacing(6)
         self._replace_input = QLineEdit()
         self._replace_input.setPlaceholderText("Replace with...")
-        self._replace_input.setFixedHeight(56)
         self._replace_input.returnPressed.connect(self._do_replace)
         # Tab between search and replace inputs
         self._search_input.installEventFilter(self)
@@ -562,17 +601,14 @@ class MainWindow(QMainWindow):
         replace_layout.addWidget(self._replace_input)
         btn_replace = QPushButton("Replace")
         btn_replace.setObjectName("findPrimaryBtn")
-        btn_replace.setFixedWidth(144)
         btn_replace.clicked.connect(self._do_replace)
         replace_layout.addWidget(btn_replace)
         btn_replace_all = QPushButton("All")
         btn_replace_all.setObjectName("findSecondaryBtn")
-        btn_replace_all.setFixedWidth(96)
         btn_replace_all.clicked.connect(self._do_replace_all)
         replace_layout.addWidget(btn_replace_all)
         btn_replace_close = QPushButton("\u2715")
         btn_replace_close.setObjectName("findCloseBtn")
-        btn_replace_close.setFixedWidth(48)
         replace_layout.addWidget(btn_replace_close)
         self._replace_bar.hide()
         # Not added to root — will live in a floating popup dialog
@@ -606,20 +642,18 @@ class MainWindow(QMainWindow):
 
         # Content area carries the original padding/spacing.
         inner = QVBoxLayout()
-        inner.setContentsMargins(24, 18, 24, 18)
-        inner.setSpacing(15)
+        inner.setContentsMargins(36, 28, 36, 28)
+        inner.setSpacing(20)
 
         # Wire close buttons to hide the dialog
         btn_close.clicked.connect(self._hide_find_dialog)
         btn_replace_close.clicked.connect(self._hide_find_dialog)
 
         inner.addWidget(self._search_bar)
-        # Visual separator between search and replace rows (color themed via
-        # the container stylesheet — see _find_popup_style).
+        # Visual separator between search and replace rows (styled via
+        # QSS in _find_popup_style — thin 1px line).
         separator = QFrame()
         separator.setObjectName("findSeparator")
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
         inner.addWidget(separator)
         inner.addWidget(self._replace_bar)
         container_layout.addLayout(inner)
