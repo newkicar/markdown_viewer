@@ -146,6 +146,176 @@ class _DropForwardTextBrowser(QTextBrowser):
             super().dropEvent(event)
 
 
+def _find_popup_style(dark: bool, accent: str) -> str:
+    """QSS for the floating find/replace popup, themed for light or dark.
+
+    The popup is a self-drawn frameless widget, so the app palette does not
+    reach it — colors must come from QSS.  One template, two color sets:
+    mirrors how the preview's default stylesheet is themed in _apply_theme.
+
+    Compact-modern layout: input and buttons share one ~34px row height, the
+    icon buttons (▲▼✕) are flat (transparent until hover), the Replace button
+    is the accent-colored primary action, and the result counter turns red on
+    no match via the [error="true"] property selector — the color stays in
+    QSS, the logic only toggles the property.
+    """
+    if dark:
+        c = {
+            "popup_bg": "#2a2a2a",
+            "popup_border": "#555555",
+            "text": "#e0e0e0",
+            "field_bg": "#3a3a3a",
+            "field_focus_bg": "#3a3a3a",
+            "btn_hover": "#4a4a4a",
+            "btn_pressed": "#5a5a5a",
+            "label": "#c0c0c0",
+            "count": "#9a9a9a",
+            "error": "#ff5555",
+            "sep": "#4a4a4a",
+            "handle_bg": "#333333",
+            "handle_hover": "#3f3f3f",
+            "handle_text": "#9a9a9a",
+        }
+    else:
+        c = {
+            "popup_bg": "#ffffff",
+            "popup_border": "#d0d0d0",
+            "text": "#000000",
+            "field_bg": "#f5f5f5",
+            "field_focus_bg": "#ffffff",
+            "btn_hover": "#e4e4e4",
+            "btn_pressed": "#cccccc",
+            "label": "#333333",
+            "count": "#888888",
+            "error": "#e81123",
+            "sep": "#e0e0e0",
+            "handle_bg": "#f0f0f0",
+            "handle_hover": "#e4e4e4",
+            "handle_text": "#888888",
+        }
+    # Primary-button hover is derived from the accent (not a hardcoded value).
+    accent_hover = QColor(accent).darker(115).name()
+    return (
+        f"QFrame#findPopup {{"
+        f"  background-color: {c['popup_bg']};"
+        f"  border: 1px solid {c['popup_border']};"
+        "  border-radius: 18px;"
+        "}"
+        # Drag handle sits at the top of the popup; its own background makes
+        # it clearly visible as a grab target (the user must notice it to know
+        # the popup can be dragged at all).
+        f"QFrame#findDragHandle {{"
+        f"  background-color: {c['handle_bg']};"
+        "  border: none;"
+        f"  border-bottom: 1px solid {c['popup_border']};"
+        "  border-top-left-radius: 18px;"
+        "  border-top-right-radius: 18px;"
+        f"  color: {c['handle_text']};"
+        "  font-size: 15px;"
+        "}"
+        f"QFrame#findDragHandle:hover {{ background-color: {c['handle_hover']}; }}"
+        # Shared input/button sizing keeps one ~34px-tall row.
+        "QLineEdit {"
+        f"  color: {c['text']};"
+        f"  background-color: {c['field_bg']};"
+        f"  border: 1px solid {c['popup_border']};"
+        "  border-radius: 9px;"
+        "  padding: 10px 18px;"
+        "  font-size: 21px;"
+        "  min-width: 540px;"
+        "}"
+        "QLineEdit:focus {"
+        f"  border: 2px solid {accent};"
+        f"  background-color: {c['field_focus_bg']};"
+        "}"
+        # Buttons are flat by default; per-role styling below gives feedback.
+        "QPushButton {"
+        f"  color: {c['text']};"
+        "  background-color: transparent;"
+        "  border: none;"
+        "  border-radius: 9px;"
+        "  padding: 9px 18px;"
+        "  font-size: 21px;"
+        "  min-height: 33px;"
+        "}"
+        f"QPushButton:hover {{ background-color: {c['btn_hover']}; }}"
+        f"QPushButton:pressed {{ background-color: {c['btn_pressed']}; }}"
+        # Prev/next navigation: flat icon buttons, hover only.
+        "QPushButton#findNavBtn { font-size: 20px; }"
+        # Close: flat, but hover turns red so the user reads it as destructive.
+        f"QPushButton#findCloseBtn:hover {{ background-color: {c['error']}; color: #ffffff; }}"
+        # Replace is the primary action: accent background + white text.
+        f"QPushButton#findPrimaryBtn {{"
+        f"  background-color: {accent};"
+        "  color: #ffffff;"
+        "  font-weight: bold;"
+        "}"
+        f"QPushButton#findPrimaryBtn:hover {{ background-color: {accent_hover}; }}"
+        f"QPushButton#findPrimaryBtn:pressed {{ background-color: {QColor(accent).darker(130).name()}; }}"
+        # Replace All is secondary: outlined, lighter than primary.
+        # No border so its height matches the borderless icon buttons
+        # (1px border would add 2px and break the shared row height).
+        "QPushButton#findSecondaryBtn {"
+        f"  background-color: {c['field_bg']};"
+        "}"
+        f"QPushButton#findSecondaryBtn:hover {{ background-color: {c['btn_hover']}; }}"
+        "QLabel {"
+        f"  color: {c['label']};"
+        "  font-size: 21px;"
+        "}"
+        # Result counter: small, quiet, turns red when there is no match.
+        f"QLabel#findCount {{"
+        f"  color: {c['count']};"
+        "  font-size: 18px;"
+        "  min-width: 0;"
+        "  padding: 0 6px;"
+        "}"
+        f"QLabel#findCount[error=\"true\"] {{ color: {c['error']}; font-weight: bold; }}"
+        f"QFrame#findSeparator {{ color: {c['sep']}; margin: 3px 0 9px 0; }}"
+    )
+
+
+class _DragHandle(QFrame):
+    """Grab strip that lets the frameless find popup be moved with the mouse.
+
+    The popup has no window title bar (FramelessWindowHint), so dragging must
+    be implemented manually.  A dedicated strip is used instead of an
+    eventFilter on the container because child widgets (QLineEdit/QPushButton)
+    consume their own mouse events — an eventFilter on the container never
+    sees presses on the inputs, so dragging there would only work in the
+    padding gaps.  This handle has no interactive children, so every press on
+    it reaches mousePressEvent reliably.
+    """
+
+    def __init__(self, dialog, parent=None):
+        super().__init__(parent)
+        self._dialog = dialog
+        self._drag_pos = None
+        self.setFixedHeight(21)
+        self.setCursor(Qt.OpenHandCursor)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        grip = QLabel("\u2261")  # ≡, a grip glyph hinting "grab here"
+        grip.setAlignment(Qt.AlignCenter)
+        # The glyph is decorative only; make it fully transparent to mouse
+        # events so presses always reach this handle.
+        grip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout.addWidget(grip)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPos() - self._dialog.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
+            self._dialog.move(event.globalPos() - self._drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_pos = None
+
+
 class MainWindow(QMainWindow):
     """Three-column: title nav | preview | source."""
 
@@ -349,22 +519,29 @@ class MainWindow(QMainWindow):
         search_layout.setSpacing(4)
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("Search...")
+        # Fixed height: 10% taller than the button row (~51px) so the input
+        # reads as the dominant field in the bar.
+        self._search_input.setFixedHeight(56)
         # Enter → next match; textChanged → live search
         self._search_input.returnPressed.connect(self._search_next)
         self._search_input.textChanged.connect(self._on_search_text_changed)
         search_layout.addWidget(self._search_input)
         self._search_label = QLabel("")
+        self._search_label.setObjectName("findCount")
         search_layout.addWidget(self._search_label)
         btn_prev = QPushButton("\u25b2")  # up triangle
-        btn_prev.setFixedWidth(52)
+        btn_prev.setObjectName("findNavBtn")
+        btn_prev.setFixedWidth(48)
         btn_prev.clicked.connect(self._search_previous)
         search_layout.addWidget(btn_prev)
         btn_next = QPushButton("\u25bc")  # down triangle
-        btn_next.setFixedWidth(52)
+        btn_next.setObjectName("findNavBtn")
+        btn_next.setFixedWidth(48)
         btn_next.clicked.connect(self._search_next)
         search_layout.addWidget(btn_next)
         btn_close = QPushButton("\u2715")  # x
-        btn_close.setFixedWidth(52)
+        btn_close.setObjectName("findCloseBtn")
+        btn_close.setFixedWidth(48)
         btn_close.clicked.connect(lambda: self._search_bar.hide())
         search_layout.addWidget(btn_close)
         self._search_bar.hide()
@@ -377,21 +554,25 @@ class MainWindow(QMainWindow):
         replace_layout.setSpacing(4)
         self._replace_input = QLineEdit()
         self._replace_input.setPlaceholderText("Replace with...")
+        self._replace_input.setFixedHeight(56)
         self._replace_input.returnPressed.connect(self._do_replace)
         # Tab between search and replace inputs
         self._search_input.installEventFilter(self)
         self._replace_input.installEventFilter(self)
         replace_layout.addWidget(self._replace_input)
         btn_replace = QPushButton("Replace")
-        btn_replace.setFixedWidth(120)
+        btn_replace.setObjectName("findPrimaryBtn")
+        btn_replace.setFixedWidth(144)
         btn_replace.clicked.connect(self._do_replace)
         replace_layout.addWidget(btn_replace)
         btn_replace_all = QPushButton("All")
-        btn_replace_all.setFixedWidth(70)
+        btn_replace_all.setObjectName("findSecondaryBtn")
+        btn_replace_all.setFixedWidth(96)
         btn_replace_all.clicked.connect(self._do_replace_all)
         replace_layout.addWidget(btn_replace_all)
         btn_replace_close = QPushButton("\u2715")
-        btn_replace_close.setFixedWidth(52)
+        btn_replace_close.setObjectName("findCloseBtn")
+        btn_replace_close.setFixedWidth(48)
         replace_layout.addWidget(btn_replace_close)
         self._replace_bar.hide()
         # Not added to root — will live in a floating popup dialog
@@ -406,67 +587,42 @@ class MainWindow(QMainWindow):
         dialog_outer.setContentsMargins(0, 0, 0, 0)
         dialog_outer.setSpacing(0)
 
-        # Container with subtle border and background
-        container = QFrame()
-        container.setObjectName("findPopup")
-        container.setStyleSheet(
-            "QFrame#findPopup {"
-            "  background-color: #ffffff;"
-            "  border: 1px solid #c0c0c0;"
-            "  border-radius: 12px;"
-            "}"
-            "QLineEdit {"
-            "  color: #000000;"
-            "  background-color: #f5f5f5;"
-            "  border: 1px solid #d0d0d0;"
-            "  border-radius: 8px;"
-            "  padding: 16px 22px;"
-            "  font-size: 24px;"
-            "  min-width: 450px;"
-            "  min-height: 30px;"
-            "}"
-            "QLineEdit:focus {"
-            "  border: 2px solid #0078d4;"
-            "  background-color: #ffffff;"
-            "}"
-            "QPushButton {"
-            "  color: #000000;"
-            "  background-color: #e8e8e8;"
-            "  border: 1px solid #c0c0c0;"
-            "  border-radius: 8px;"
-            "  padding: 14px 22px;"
-            "  font-size: 18px;"
-            "  min-width: 52px;"
-            "}"
-            "QPushButton:hover {"
-            "  background-color: #d4d4d4;"
-            "}"
-            "QPushButton:pressed {"
-            "  background-color: #b8b8b8;"
-            "}"
-            "QLabel {"
-            "  color: #333333;"
-            "  font-size: 18px;"
-            "  min-width: 80px;"
-            "  qproperty-alignment: AlignCenter;"
-            "}"
-        )
+        # Container with subtle border and background. Colors are themed in
+        # _apply_theme (dark/light): this is a self-drawn frameless popup, so
+        # the app palette does not reach it and QSS must carry the colors.
+        self._find_container = QFrame()
+        self._find_container.setObjectName("findPopup")
+        container = self._find_container  # local alias for layout below
         container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(16, 12, 16, 12)
-        container_layout.setSpacing(10)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+
+        # Drag handle (visible strip) lets the user move the frameless popup.
+        # Placed flush against the container's top edge so its own rounded
+        # corners merge with the popup's.
+        self._drag_handle = _DragHandle(self._find_dialog)
+        self._drag_handle.setObjectName("findDragHandle")
+        container_layout.addWidget(self._drag_handle)
+
+        # Content area carries the original padding/spacing.
+        inner = QVBoxLayout()
+        inner.setContentsMargins(24, 18, 24, 18)
+        inner.setSpacing(15)
 
         # Wire close buttons to hide the dialog
         btn_close.clicked.connect(self._hide_find_dialog)
         btn_replace_close.clicked.connect(self._hide_find_dialog)
 
-        container_layout.addWidget(self._search_bar)
-        # Visual separator between search and replace rows
+        inner.addWidget(self._search_bar)
+        # Visual separator between search and replace rows (color themed via
+        # the container stylesheet — see _find_popup_style).
         separator = QFrame()
+        separator.setObjectName("findSeparator")
         separator.setFrameShape(QFrame.HLine)
         separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("color: #e0e0e0; margin: 2px 0;")
-        container_layout.addWidget(separator)
-        container_layout.addWidget(self._replace_bar)
+        inner.addWidget(separator)
+        inner.addWidget(self._replace_bar)
+        container_layout.addLayout(inner)
         dialog_outer.addWidget(container)
 
         # Escape closes the popup
@@ -1202,7 +1358,7 @@ class MainWindow(QMainWindow):
         self._source.setExtraSelections([])
         # Qt 5.15 workaround: setExtraSelections can corrupt cursor rendering
         self._source.setTextCursor(self._source.textCursor())
-        self._search_label.setText("")
+        self._set_search_count("")
         self._find_dialog.hide()
         # Restore focus to the editor so the text cursor appears
         self._source.setFocus()
@@ -1253,10 +1409,24 @@ class MainWindow(QMainWindow):
         else:
             self._search_results = []
             self._search_index = 0
-            self._search_label.setText("")
+            self._set_search_count("")
             self._source.setExtraSelections([])
             # Qt 5.15 workaround: setExtraSelections can corrupt cursor rendering
             self._source.setTextCursor(self._source.textCursor())
+
+    def _set_search_count(self, text: str, error: bool = False) -> None:
+        """Update the search counter label, toggling its no-match state.
+
+        The red color lives in the popup QSS (QLabel#findCount[error="true"]),
+        so this only flips the property and repolishes the widget — no color
+        values are hardcoded here.  Repolish only on change to avoid churn.
+        """
+        self._search_label.setText(text)
+        if bool(self._search_label.property("error")) != error:
+            self._search_label.setProperty("error", error)
+            style = self._search_label.style()
+            style.unpolish(self._search_label)
+            style.polish(self._search_label)
 
     def _do_search(self) -> None:
         """Execute search and update highlight + label."""
@@ -1265,11 +1435,11 @@ class MainWindow(QMainWindow):
         self._search_results = find_in_text(content, query)
         self._search_index = 0
         if self._search_results:
-            self._search_label.setText(f"1/{len(self._search_results)}")
+            self._set_search_count(f"1/{len(self._search_results)}")
             self._highlight_search_results()
             self._jump_to_search_result(0)
         else:
-            self._search_label.setText("0/0")
+            self._set_search_count("0/0", error=True)
             self._source.setExtraSelections([])
             # Qt 5.15 workaround: setExtraSelections can corrupt cursor rendering
             self._source.setTextCursor(self._source.textCursor())
@@ -1279,7 +1449,7 @@ class MainWindow(QMainWindow):
         if not self._search_results:
             return
         self._search_index = (self._search_index + 1) % len(self._search_results)
-        self._search_label.setText(
+        self._set_search_count(
             f"{self._search_index + 1}/{len(self._search_results)}"
         )
         self._jump_to_search_result(self._search_index)
@@ -1289,7 +1459,7 @@ class MainWindow(QMainWindow):
         if not self._search_results:
             return
         self._search_index = (self._search_index - 1) % len(self._search_results)
-        self._search_label.setText(
+        self._set_search_count(
             f"{self._search_index + 1}/{len(self._search_results)}"
         )
         self._jump_to_search_result(self._search_index)
@@ -1352,8 +1522,11 @@ class MainWindow(QMainWindow):
             self._find_dialog.activateWindow()
             self._position_find_dialog()
         self._replace_bar.show()
-        self._replace_input.setFocus()
-        self._replace_input.selectAll()
+        # Focus the search input, not the replace input: the user's habit is
+        # to type the search text first, then the replacement text (Tab moves
+        # between the two — see eventFilter).
+        self._search_input.setFocus()
+        self._search_input.selectAll()
 
     def _do_replace(self) -> None:
         """Replace the current search match and advance to the next."""
@@ -1379,7 +1552,7 @@ class MainWindow(QMainWindow):
             idx = min(self._search_index, len(self._search_results) - 1)
             self._search_index = idx
             self._jump_to_search_result(idx)
-            self._search_label.setText(
+            self._set_search_count(
                 f"{idx + 1}/{len(self._search_results)}"
             )
             self.statusBar().showMessage(
@@ -1636,9 +1809,18 @@ class MainWindow(QMainWindow):
             )
             # Update syntax highlighter for dark mode
             self._highlighter.set_dark_mode(True)
+            # Theme the find/replace popup (self-drawn frameless widget).
+            self._find_container.setStyleSheet(_find_popup_style(dark=True, accent=accent))
         else:
             self._source.setStyleSheet("")
             self._preview.setStyleSheet("")
+            # Clear the app stylesheet BEFORE re-applying the widget-level
+            # padding below. If the widget stylesheet were set first, Qt 5.15
+            # would resolve its QSS against the still-active dark rules and
+            # write the dark background into the tree's palette cache, which
+            # the app-level cleanup cannot flush (left bar stays dark).
+            app.setStyleSheet("")
+            app.setPalette(app.style().standardPalette())
             # Row padding is reapplied here because clearing the stylesheet above
             # would otherwise drop the spacing set in _build_ui.
             self._title_tree.setStyleSheet(_TITLE_TREE_ROW_PADDING)
@@ -1664,10 +1846,10 @@ class MainWindow(QMainWindow):
             )
             self.menuBar().setStyleSheet("")
             self.statusBar().setStyleSheet("")
-            app.setStyleSheet("")
-            app.setPalette(app.style().standardPalette())
             # Update syntax highlighter for light mode
             self._highlighter.set_dark_mode(False)
+            # Theme the find/replace popup (self-drawn frameless widget).
+            self._find_container.setStyleSheet(_find_popup_style(dark=False, accent="#0078d4"))
 
 
 def _download_external_image(url: str, max_width: int) -> QPixmap | None:
